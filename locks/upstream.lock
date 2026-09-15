@@ -1,0 +1,39 @@
+# mica-lock v1
+# The third-party inputs of mica-build-env (mica:docs/design/release-lock.md, 4.1).
+# image rows: the upstream images mirrored into ghcr.io/micaoss/mica-build-env as
+#   upstream.<name>.<digest12> (publish-mirrors.sh), one row per platform a release guarantees.
+# source rows: the toolchain archives the images install, verified by sha256.
+# Measure a new pin: docker buildx imagetools inspect <reference> (Digest:), or curl -fsSL <url> | sha256sum.
+image	alpine.3.24.1	amd64	docker.io/library/alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+image	alpine.3.24.1	arm64	docker.io/library/alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+image	debian.trixie-slim	386	docker.io/library/debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+image	debian.trixie-slim	amd64	docker.io/library/debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+image	debian.trixie-slim	arm64	docker.io/library/debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+image	docker-dockerfile.1	amd64	docker.io/docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+image	docker-dockerfile.1	arm64	docker.io/docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+image	docker-dockerfile.1-labs	amd64	docker.io/docker/dockerfile:1-labs@sha256:63e440b412b6acba117974e793b7e7f702e58ee65e044bdff1b8d388ee0d853b
+image	docker-dockerfile.1-labs	arm64	docker.io/docker/dockerfile:1-labs@sha256:63e440b412b6acba117974e793b7e7f702e58ee65e044bdff1b8d388ee0d853b
+image	docker.28-cli	amd64	docker.io/library/docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349fd857dd85035f98c2c9acbdd4d
+image	docker.28-cli	arm64	docker.io/library/docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349fd857dd85035f98c2c9acbdd4d
+image	moby-buildkit.v0.33.0	amd64	docker.io/moby/buildkit:v0.33.0@sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3
+image	moby-buildkit.v0.33.0	arm64	docker.io/moby/buildkit:v0.33.0@sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3
+image	registry.3.1.1	amd64	docker.io/library/registry:3.1.1@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33
+image	registry.3.1.1	arm64	docker.io/library/registry:3.1.1@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33
+image	rhysd-actionlint.1.7.12	amd64	docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+image	rhysd-actionlint.1.7.12	arm64	docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+image	tonistiigi-binfmt.qemu-v10.2.3	amd64	docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+image	tonistiigi-binfmt.qemu-v10.2.3	arm64	docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+image	ubuntu.24.04	amd64	docker.io/library/ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+image	ubuntu.24.04	arm64	docker.io/library/ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+source	bun	amd64	1.4.2	36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913	https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip
+source	bun	arm64	1.4.2	54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7	https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-aarch64.zip
+source	cargo-deny	amd64	0.19.9	f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af	https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.9/cargo-deny-0.19.9-x86_64-unknown-linux-musl.tar.gz
+source	cargo-deny	arm64	0.19.9	32580dcc2bc13fbeeb7c50edc38ef99c3b9ce9569a1d07a96e11b3b941f3e72e	https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.9/cargo-deny-0.19.9-aarch64-unknown-linux-musl.tar.gz
+source	cargo-nextest	amd64	0.9.143	6d891c18105ec2d33f6e441a4f92b7ccab47ba263e22055c8bb66884243f3389	https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.143/cargo-nextest-0.9.143-x86_64-unknown-linux-musl.tar.gz
+source	cargo-nextest	arm64	0.9.143	0560ce0ce017f368c54b5db86588370fc03b470985490fa81200e62a657dda05	https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.143/cargo-nextest-0.9.143-aarch64-unknown-linux-musl.tar.gz
+source	go	amd64	1.26.7	ffb5f8de10c62550dfddab66b36b57030721e0a44a3218e9e1181d7b59f121ca	https://go.dev/dl/go1.26.7.linux-amd64.tar.gz
+source	go	arm64	1.26.7	5a4ec883379d51ee9ce1040d5e87f8d35e20387574dd8c947feb01eabc3c1b37	https://go.dev/dl/go1.26.7.linux-arm64.tar.gz
+source	rust	amd64	1.98.0	ed8ee2df70909c88cbaf87a6cfa3920dac00b537de12a6abe6906641e0f5952f	https://static.rust-lang.org/dist/rust-1.98.0-x86_64-unknown-linux-gnu.tar.xz
+source	rust	arm64	1.98.0	ac9283184301aeed06ecc9f5aa4c1be7041e18a1b197b6cb6c5d162d98f566da	https://static.rust-lang.org/dist/rust-1.98.0-aarch64-unknown-linux-gnu.tar.xz
+source	rust-std	amd64	1.98.0	f5022e6c95a5ad23cca2513dc8281200f585fa188de6370aa37b128a43f876a3	https://static.rust-lang.org/dist/rust-std-1.98.0-x86_64-unknown-linux-gnu.tar.xz
+source	rust-std	arm64	1.98.0	a36f7ac98af20ef0ba6368aace0345efabbebaef7962eba99f47190fd256162d	https://static.rust-lang.org/dist/rust-std-1.98.0-aarch64-unknown-linux-gnu.tar.xz

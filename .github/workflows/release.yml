@@ -1,0 +1,138 @@
+name: release
+# Runs only when a release is published (`gh release create <YYYYMMDD-HHMM>
+# --target <commit>`), building from the release's tag. The mirror job copies the
+# upstream images of locks/upstream.lock into this repository's package; the plan job lists the
+# build-env images these inputs do not have yet; one job per architecture builds
+# them natively on its own runner and pushes <image>.<arch>.build-<commit12>; the
+# merge job joins both into the multi-arch <image>.inputs-<16>; the assets job
+# attaches mica-build-env.lock (mica-lock v1) and SHA256SUMS to the release.
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+env:
+  TAG: ${{ github.event.release.tag_name }}
+jobs:
+  mirror:
+    # The upstream images of locks/upstream.lock, copied whole by digest into this
+    # repository's package and read back anonymously, before anything builds on them.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+      - name: Mirror the upstream images
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          bash publish-mirrors.sh --publish
+  plan:
+    needs: mirror
+    runs-on: ubuntu-24.04
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+      - name: The tag is a time YYYYMMDD-HHMM
+        run: '[[ "${TAG}" =~ ^[0-9]{8}-[0-9]{4}$ ]] || { echo "error: the tag ${TAG} is not YYYYMMDD-HHMM" >&2; exit 1; }'
+      - name: What these inputs still need
+        id: plan
+        run: |
+          set -euo pipefail
+          bash publish-images.sh --plan "$RUNNER_TEMP/plan"
+          cat "$RUNNER_TEMP/plan"
+          {
+            echo "plan<<PLAN"
+            cat "$RUNNER_TEMP/plan"
+            echo "PLAN"
+            echo "build=$(grep -c ' build$' "$RUNNER_TEMP/plan" || true)"
+          } >> "$GITHUB_OUTPUT"
+  build:
+    needs: plan
+    if: needs.plan.outputs.build != '0'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+      # Restore only, exact key: the archives main's CI gathered for these pins.
+      # Without them the images download the archives themselves.
+      - name: Restore the ${{ matrix.arch }} toolchain archives
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/mica-fetch-seed
+          key: mica-fetch-seed-${{ matrix.arch }}-${{ hashFiles('locks/upstream.lock') }}
+      - name: Build natively and push ${{ matrix.arch }}
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          export MICA_FETCH_SEED="$RUNNER_TEMP/mica-fetch-seed"
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # The plan goes outside the checkout: publish-images.sh refuses a dirty tree.
+          printf '%s\n' "${PLAN}" >"$RUNNER_TEMP/plan"
+          bash publish-images.sh --build "${ARCH}" "$RUNNER_TEMP/plan"
+  merge:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+      - name: Merge both architectures
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          printf '%s\n' "${PLAN}" >"$RUNNER_TEMP/plan"
+          bash publish-images.sh --merge "$RUNNER_TEMP/plan"
+          bash publish-images.sh --resolve --out "$RUNNER_TEMP/images.rows"
+          {
+            echo "Image rows:"
+            echo '```'
+            cat "$RUNNER_TEMP/images.rows"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+  assets:
+    needs: merge
+    # A skipped build (every image already published) would otherwise skip this job too.
+    if: always() && needs.merge.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - name: Attach the assets to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash publish-release.sh "${TAG}"

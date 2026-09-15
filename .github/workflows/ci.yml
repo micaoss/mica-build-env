@@ -1,0 +1,45 @@
+name: ci
+# The quality gates on every push and pull request. Publishes nothing.
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: locks/upstream.lock and params.env
+        run: bash from.sh --check
+      - name: Image inputs and the release refusals
+        run: bash tests/publish-test.sh
+      - name: Workflows
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo ghcr.io/micaoss/mica-build-env:upstream.rhysd-actionlint.1.7.12.b1934ee5f1c5@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+  archives:
+    # Only a push to main writes the cache: pull requests never do, and a release
+    # (whose cache would be scoped to its tag) only restores it. The key is the
+    # source rows of locks/upstream.lock, matched exactly; every archive is verified
+    # against its pin when it is gathered and again when an image uses it.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the ${{ matrix.arch }} toolchain archives
+        id: restore
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/mica-fetch-seed
+          key: mica-fetch-seed-${{ matrix.arch }}-${{ hashFiles('locks/upstream.lock') }}
+      - name: Gather the ${{ matrix.arch }} toolchain archives
+        if: steps.restore.outputs.cache-hit != 'true'
+        run: bash fetch-archives.sh ${{ matrix.arch }} "$RUNNER_TEMP/mica-fetch-seed"
+      - name: Save the ${{ matrix.arch }} toolchain archives
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/mica-fetch-seed
+          key: mica-fetch-seed-${{ matrix.arch }}-${{ hashFiles('locks/upstream.lock') }}

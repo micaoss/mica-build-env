@@ -1,0 +1,6 @@
+# Allow-list: only the filtered inputs and the scripts the Dockerfile mounts.
+*
+!inputs.env
+!fetch.sh
+!install-linker.sh
+!assert.sh
