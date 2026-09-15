@@ -17,7 +17,8 @@
 # An image's inputs are its keys of locks/upstream.lock and params.env
 # (pins.sh), its parent's inputs (or the upstream reference for base), its
 # Dockerfile, dockerignore and the scripts that allow-list admits, and lib/;
-# their sha256 is the index annotation com.mica.build-env.inputs. An image is
+# their sha256 is the image label com.mica.build-env.inputs, on every platform
+# (a Docker manifest list carries no annotations). An image is
 # built when no release tag of it carries these inputs, or its parent is built
 # in the same plan; otherwise the release tags the published index it finds, so
 # an unchanged image keeps its digest. A published tag is never re-pointed, and
@@ -26,7 +27,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY="${MICA_IMAGES_REPOSITORY:-ghcr.io/micaoss/mica-build-env}"
-ANNOTATION=com.mica.build-env.inputs
+LABEL=com.mica.build-env.inputs
 # shellcheck source=pins.sh
 . "${HERE}/pins.sh"
 ARCHES=(amd64 arm64)
@@ -150,8 +151,12 @@ read_plan() {
     done
 }
 
-# inputs_annotation <manifest file>: the inputs an index was published for.
-inputs_annotation() { jq -r --arg k "${ANNOTATION}" '.annotations[$k] // empty' "$1"; }
+# inputs_label <ref>: the inputs every platform of <ref> was built for, read with
+# no credential; empty when a platform carries none or they differ.
+inputs_label() {
+    DOCKER_CONFIG="${WORK}/anon" docker buildx imagetools inspect "$1" --format '{{json .Image}}' 2>/dev/null |
+        jq -r --arg k "${LABEL}" 'if has("config") then [.] else [.[]] end | map(.config.Labels[$k] // "") | unique | if length == 1 then .[0] else "" end'
+}
 
 case "${MODE}" in
 plan)
@@ -166,7 +171,7 @@ plan)
             tags="$(release_tags "${name}")" || { echo "error: the tags of ${REPOSITORY} could not be listed anonymously" >&2; exit 1; }
             for t in ${tags}; do
                 d="$(raw "${REPOSITORY}:${t}" "${WORK}/index")" || continue
-                [ "$(inputs_annotation "${WORK}/index")" = "${INPUTS[${name}]}" ] || continue
+                [ "$(inputs_label "${REPOSITORY}:${t}@${d}" || true)" = "${INPUTS[${name}]}" ] || continue
                 found="${REPOSITORY}:${t}@${d}"
                 break
             done
@@ -197,10 +202,10 @@ build)
         case "${parent}:${ACTION[${parent}]-}" in
         upstream:*:* | *:build)
             # The upstream image, or a parent this job has just built into the local store.
-            MICA_BUILD_PLATFORM="linux/${ARCH}" bash "${HERE}/build.sh" "${name}" >&2
+            MICA_BUILD_PLATFORM="linux/${ARCH}" MICA_BUILD_INPUTS="${INPUTS[${name}]}" bash "${HERE}/build.sh" "${name}" >&2
             ;;
         *)
-            MICA_BUILD_PLATFORM="linux/${ARCH}" MICA_BUILD_PARENT="${SOURCE[${parent}]}" bash "${HERE}/build.sh" "${name}" >&2
+            MICA_BUILD_PLATFORM="linux/${ARCH}" MICA_BUILD_INPUTS="${INPUTS[${name}]}" MICA_BUILD_PARENT="${SOURCE[${parent}]}" bash "${HERE}/build.sh" "${name}" >&2
             ;;
         esac
         src="${REPOSITORY}:${name}.${ARCH}.${RELEASE}"
@@ -226,7 +231,7 @@ merge)
         rel="${REPOSITORY}:${name}.${RELEASE}"
         if held="$(index_digest "${rel}")" && [ -n "${held}" ]; then
             # A rerun of this release: the tag must already be these inputs.
-            raw "${rel}" "${WORK}/held" >/dev/null && [ "$(inputs_annotation "${WORK}/held")" = "${INPUTS[${name}]}" ] || {
+            [ "$(inputs_label "${rel}@${held}" || true)" = "${INPUTS[${name}]}" ] || {
                 echo "error: ${rel} already holds ${held}, which is not these inputs; a published tag is never re-pointed" >&2
                 exit 1
             }
@@ -238,11 +243,11 @@ merge)
                 index_digest "${src}" >/dev/null || { echo "error: ${src} is not pushed; the ${arch} build job did not finish ${name}" >&2; exit 1; }
                 sources+=("${src}")
             done
-            docker buildx imagetools create --annotation "index:${ANNOTATION}=${INPUTS[${name}]}" -t "${rel}" "${sources[@]}" >&2
+            docker buildx imagetools create -t "${rel}" "${sources[@]}" >&2
         else
             docker buildx imagetools create -t "${rel}" "${SOURCE[${name}]}" >&2
         fi
-        digest="$(raw "${rel}" "${WORK}/index")" && [ "$(inputs_annotation "${WORK}/index")" = "${INPUTS[${name}]}" ] || {
+        digest="$(raw "${rel}" "${WORK}/index")" && [ "$(inputs_label "${rel}@${digest}" || true)" = "${INPUTS[${name}]}" ] || {
             package="${REPOSITORY#*/}"
             echo "error: ${rel} does not read anonymously with these inputs. If the package is private, set it public once at https://github.com/orgs/${package%%/*}/packages/container/package/${package#*/} (Package settings, Danger Zone, Change visibility: Public) and rerun" >&2
             exit 1
@@ -261,7 +266,7 @@ resolve)
             echo "error: ${ref} (${name}) is not published or does not read anonymously; the release workflow publishes it for ${RELEASE}" >&2
             exit 1
         }
-        [ "$(inputs_annotation "${WORK}/index")" = "${INPUTS[${name}]}" ] || {
+        [ "$(inputs_label "${ref}@${digest}" || true)" = "${INPUTS[${name}]}" ] || {
             echo "error: ${ref} was published for other inputs than this commit's; it is not the image these inputs name" >&2
             exit 1
         }

@@ -88,7 +88,7 @@ rules that apply to a release of mica-build-env are this file at its tag.
 - An image's inputs are its rows of `locks/upstream.lock` and its keys of
   `params.env`, its parent's inputs (the `debian:trixie-slim` reference for
   base), its Dockerfile, its dockerignore allow-list and `lib/`; their sha256
-  is the index annotation `com.mica.build-env.inputs`. An image is rebuilt only
+  is the image label `com.mica.build-env.inputs` on every platform. An image is rebuilt only
   when no release tag of it carries these inputs or its parent is rebuilt,
   which also rebuilds every image built on it; otherwise the new release tags
   the published index, so an unchanged image keeps its digest. A tag that

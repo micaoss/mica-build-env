@@ -34,30 +34,34 @@ g commit -q -m fixture
 # ------------------------------------------------------------ stubs
 # docker is a registry in ${STUB_REG}: blobs/<digest> holds manifest bytes and
 # tags/<ref with / written %> the digest a tag names; `imagetools inspect [--raw]`
-# answers from it. `imagetools create -t <tag> <source>` points the tag at the
-# source; with --annotation or several sources it stores a new index of their
-# manifests carrying the annotations. curl serves the registry's token and
-# tags/list from the same tags, as ghcr.io answers them.
+# answers from it, and labels/<digest> holds what `--format '{{json .Image}}'`
+# prints (each platform's config labels). `imagetools create -t <tag> <source>`
+# points the tag at the source; with several sources it stores a new index of
+# their manifests and labels. curl serves the registry's token and tags/list from
+# the same tags, as ghcr.io answers them.
 STUBS="${WORK}/stubs"
 LOG="${WORK}/calls"
 UP="${WORK}/uploaded"
 REG="${WORK}/registry"
-mkdir -p "${STUBS}" "${UP}" "${REG}/blobs" "${REG}/tags"
+mkdir -p "${STUBS}" "${UP}" "${REG}/blobs" "${REG}/tags" "${REG}/labels"
 cat >"${STUBS}/mkindex" <<'STUB'
 #!/usr/bin/env bash
-# mkindex <label> <platforms>: store an index of one manifest per platform; print its digest.
+# mkindex <label> <platforms> [<inputs>]: store an index of one manifest per platform,
+# each labelled com.mica.build-env.inputs=<inputs> when given; print its digest.
 set -euo pipefail
-entries=""
+entries="" labels='{}'
 for p in ${2//,/ }; do
     m="$(printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","label":"%s","arch":"%s"}' "$1" "$p")"
     # A platform manifest ends in a newline, as Docker Hub's do: the digest covers it.
     d="sha256:$(printf '%s\n' "${m}" | sha256sum | cut -d' ' -f1)"
     printf '%s\n' "${m}" >"${STUB_REG}/blobs/${d}"
     entries="${entries:+${entries},}$(printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"%s","platform":{"os":"linux","architecture":"%s"}}' "${d}" "${p}")"
+    labels="$(jq -c --arg p "linux/${p}" --arg v "${3-}" '. + {($p): {config: {Labels: (if $v == "" then {} else {"com.mica.build-env.inputs": $v} end)}}}' <<<"${labels}")"
 done
 i="$(printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[%s]}' "${entries}")"
 d="sha256:$(printf '%s' "${i}" | sha256sum | cut -d' ' -f1)"
 printf '%s' "${i}" >"${STUB_REG}/blobs/${d}"
+printf '%s' "${labels}" >"${STUB_REG}/labels/${d}"
 echo "${d}"
 STUB
 cat >"${STUBS}/docker" <<'STUB'
@@ -74,29 +78,27 @@ inspect)
     if [ "$4" = --raw ]; then
         d="$(resolve "$5")" || exit 1
         cat "${STUB_REG}/blobs/${d}"
+    elif [ "${5-}" = --format ]; then
+        d="$(resolve "$4")" || exit 1
+        cat "${STUB_REG}/labels/${d}" 2>/dev/null || echo '{}'
     else
         d="$(resolve "$4")" || exit 1
         printf 'Name: %s\nMediaType: application/vnd.oci.image.index.v1+json\nDigest: %s\n' "$4" "${d}"
     fi ;;
 create)
-    shift 3
-    annotations='{}' tag="" sources=()
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-        --annotation) kv="${2#index:}"; annotations="$(jq -c --arg k "${kv%%=*}" --arg v "${kv#*=}" '. + {($k): $v}' <<<"${annotations}")"; shift 2 ;;
-        -t) tag="$2"; shift 2 ;;
-        *) sources+=("$1"); shift ;;
-        esac
-    done
+    [ "$4" = -t ] || { echo "stub docker: create takes -t <tag> <source>... here" >&2; exit 2; }
+    tag="$5"
+    shift 5
     digests=()
-    for src in "${sources[@]}"; do digests+=("$(resolve "${src}")") || { echo "stub docker: no source ${src}" >&2; exit 1; }; done
-    if [ "${#sources[@]}" = 1 ] && [ "${annotations}" = '{}' ]; then
+    for src in "$@"; do digests+=("$(resolve "${src}")") || { echo "stub docker: no source ${src}" >&2; exit 1; }; done
+    if [ "${#digests[@]}" = 1 ]; then
         d="${digests[0]}"
     else
         i="$(for d in "${digests[@]}"; do cat "${STUB_REG}/blobs/${d}"; echo; done |
-            jq -sc --argjson a "${annotations}" '{schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [.[].manifests[]], annotations: $a}')"
+            jq -sc '{schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [.[].manifests[]]}')"
         d="sha256:$(printf '%s' "${i}" | sha256sum | cut -d' ' -f1)"
         printf '%s' "${i}" >"${STUB_REG}/blobs/${d}"
+        for x in "${digests[@]}"; do cat "${STUB_REG}/labels/${x}" 2>/dev/null || echo '{}'; done | jq -sc 'add' >"${STUB_REG}/labels/${d}"
     fi
     printf '%s\n' "${d}" >"${STUB_REG}/tags/${tag//\//%}" ;;
 *) echo "stub docker: unexpected $*" >&2; exit 2 ;;
@@ -202,7 +204,7 @@ check_refusal "a lock that breaks the file rules is refused by its rule" "locks/
 # ------------------------------------------------------------ publish-images.sh
 # Every tag is a release: <image>.<release>, per architecture <image>.<arch>.<release>.
 tagfile() { printf '%s/tags/ghcr.io%%micaoss%%mica-build-env:%s' "${REG}" "$1"; }
-annotation() { jq -r '.annotations["com.mica.build-env.inputs"] // empty' "${REG}/blobs/$(cat "$(tagfile "$1")")"; }
+label() { jq -r '[.[].config.Labels["com.mica.build-env.inputs"] // ""] | unique | if length == 1 then .[0] else "" end' "${REG}/labels/$(cat "$(tagfile "$1")")"; }
 plan() { : >"${LOG}"; (cd "${BE}" && bash publish-images.sh --plan "$1") >"${WORK}/plan.out" 2>&1; }
 merge() { : >"${LOG}"; (cd "${BE}" && bash publish-images.sh --merge "$1" "$2") >"${WORK}/merge.out" 2>&1; }
 resolve() { : >"${LOG}"; rm -f "$2"; (cd "${BE}" && bash publish-images.sh --resolve "$1" --out "$2") >"${WORK}/resolve.out" 2>&1; }
@@ -237,15 +239,15 @@ build_refusal "--merge with a release that is not YYYYMMDD-HHMM is refused" "is 
 build_refusal "--merge of an image whose architectures were not pushed is refused" "base.amd64.${R0} is not pushed" --merge "${R0}" "${WORK}/none.plan"
 
 # The build jobs of ${R0} pushed <image>.<arch>.${R0}.
-for n in base c go rust; do for a in amd64 arm64; do mkindex "${n}-${a}" "${a}" >"$(tagfile "${n}.${a}.${R0}")"; done; done
-if merge "${R0}" "${WORK}/none.plan" && [ "$(grep -c "imagetools create --annotation index:com.mica.build-env.inputs=[0-9a-f]* -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.amd64\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.arm64\.${R0}" "${LOG}")" = 4 ]; then
+for n in base c go rust; do for a in amd64 arm64; do mkindex "${n}-${a}" "${a}" "$(inputs_of "${n}")" >"$(tagfile "${n}.${a}.${R0}")"; done; done
+if merge "${R0}" "${WORK}/none.plan" && [ "$(grep -c "imagetools create -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.amd64\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.arm64\.${R0}" "${LOG}")" = 4 ]; then
     pass "--merge publishes each built image as <image>.<release>, both architectures in one index"
 else
     fail "--merge ${R0}: $(tail -n3 "${WORK}/merge.out" | tr '\n' ' ')"
 fi
 ok=1
-for n in base c go rust; do [ "$(annotation "${n}.${R0}")" = "$(inputs_of "${n}")" ] || ok=0; done
-[ "${ok}" = 1 ] && pass "... each index carries its inputs as com.mica.build-env.inputs" || fail "... annotations: $(annotation "base.${R0}")"
+for n in base c go rust; do [ "$(label "${n}.${R0}")" = "$(inputs_of "${n}")" ] || ok=0; done
+[ "${ok}" = 1 ] && pass "... every platform of each image carries its inputs as the label com.mica.build-env.inputs" || fail "... labels: $(label "base.${R0}")"
 merge "${R0}" "${WORK}/none.plan" && ! says "${LOG}" "imagetools create" && pass "... a rerun re-points nothing" || fail "... rerun: $(cat "${LOG}")"
 
 plan "${WORK}/all.plan" && [ "$(actions "${WORK}/all.plan")" = "base:published c:published go:published rust:published" ] &&
@@ -311,6 +313,7 @@ cp "${WORK}/go.tag" "$(tagfile "go.${T1}")"
 jq -c '.manifests |= map(select(.platform.architecture == "amd64"))' "${REG}/blobs/$(cat "$(tagfile "base.${T1}")")" >"${WORK}/amd64.index"
 d="sha256:$(tr -d '\n' <"${WORK}/amd64.index" | sha256sum | cut -d' ' -f1)"
 tr -d '\n' <"${WORK}/amd64.index" >"${REG}/blobs/${d}" && printf '%s\n' "${d}" >"$(tagfile base.20260104-0000)"
+jq -c '{"linux/amd64": .["linux/amd64"]}' "${REG}/labels/$(cat "$(tagfile "base.${T1}")")" >"${REG}/labels/${d}"
 if ! resolve 20260104-0000 "${WORK}/amd64.rows" && says "${WORK}/resolve.out" "lists no linux/arm64 manifest"; then
     pass "--resolve refuses an index that lists no arm64 manifest"
 else

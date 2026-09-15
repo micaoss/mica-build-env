@@ -8,6 +8,8 @@
 #   MICA_FETCH_SEED=<dir> ...  hands the archives fetch-archives.sh gathered to the fetch stages
 #   MICA_BUILD_PARENT=<name:tag@sha256:...> bash build.sh go
 #       builds one image on that published parent instead of its localhost/ one
+#   MICA_BUILD_INPUTS=<sha256 of the inputs> bash build.sh go
+#       labels that one image com.mica.build-env.inputs (publish-images.sh)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,6 +57,14 @@ if [ -n "${PARENT}" ]; then
         echo "error: MICA_BUILD_PARENT=${PARENT} is not a digest pin (name:tag@sha256:<64 hex>)" >&2
         exit 1
     }
+fi
+LABEL_ARGS=()
+if [ -n "${MICA_BUILD_INPUTS-}" ]; then
+    [ "${#SELECTED[@]}" -eq 1 ] && [[ "${MICA_BUILD_INPUTS}" =~ ^[0-9a-f]{64}$ ]] || {
+        echo "error: MICA_BUILD_INPUTS labels exactly one named image with a 64-hex sha256; it is '${MICA_BUILD_INPUTS}'" >&2
+        exit 1
+    }
+    LABEL_ARGS=(--label "com.mica.build-env.inputs=${MICA_BUILD_INPUTS}")
 fi
 
 case "$(uname -m)" in
@@ -245,6 +255,7 @@ for row in "${IMAGES[@]}"; do
         ${CTX_ARGS[@]+"${CTX_ARGS[@]}"} \
         --build-context mica-lib="${HERE}/lib" \
         --build-context mica-fetch-seed="${SEED}" \
+        ${LABEL_ARGS[@]+"${LABEL_ARGS[@]}"} \
         -f "${DOCKERFILE}" \
         -t "${TAG}" \
         --load \
