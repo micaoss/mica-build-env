@@ -19,14 +19,14 @@ command -v docker >/dev/null 2>&1 || {
     exit 1
 }
 
-# One row per image: <directory>:<input key prefixes>:<its FROM: an upstream:<name> image or a LOCAL_ key>.
+# One row per image: <directory>|<input key prefixes>|<its FROM: an upstream:<name> image or a LOCAL_ key>.
 # Order matters: a row FROM a localhost/mica-build-* tag must follow the row that
 # builds it (checked below).
 IMAGES=(
-    "base:BASE_,DEB_,OPENSSL_:upstream:debian:trixie-slim"
-    "c:C_:LOCAL_MICA_BUILD_BASE"
-    "go:GO_:LOCAL_MICA_BUILD_C"
-    "rust:RUST_,RUSTCHECK_:LOCAL_MICA_BUILD_C"
+    "base|BASE_,DEB_,OPENSSL_|upstream:debian:trixie-slim"
+    "c|C_|LOCAL_MICA_BUILD_BASE"
+    "go|GO_|LOCAL_MICA_BUILD_C"
+    "rust|RUST_,RUSTCHECK_|LOCAL_MICA_BUILD_C"
 )
 
 # Arguments select rows by name; none selects the whole table.
@@ -34,10 +34,10 @@ declare -A SELECTED=()
 for arg in "$@"; do
     known=0
     for row in "${IMAGES[@]}"; do
-        [ "${row%%:*}" = "${arg}" ] && known=1 && break
+        [ "${row%%|*}" = "${arg}" ] && known=1 && break
     done
     [ "${known}" = 1 ] || {
-        echo "error: '${arg}' is not an image this script builds; the images are: $(printf '%s\n' "${IMAGES[@]}" | cut -d: -f1 | tr '\n' ' ')" >&2
+        echo "error: '${arg}' is not an image this script builds; the images are: $(printf '%s\n' "${IMAGES[@]}" | cut -d'|' -f1 | tr '\n' ' ')" >&2
         exit 1
     }
     SELECTED["${arg}"]=1
@@ -124,10 +124,7 @@ fi
 bad=0
 built_so_far=()
 for row in "${IMAGES[@]}"; do
-    name="${row%%:*}"
-    rest="${row#*:}"
-    prefixes="${rest%%:*}"
-    from_key="${rest##*:}"
+    IFS='|' read -r name prefixes from_key <<<"${row}"
 
     # Otherwise the child silently builds on whatever a previous run left tagged.
     case "${from_key}" in
@@ -186,10 +183,7 @@ CTX_DIR="${SCRATCH}/contexts"
 mkdir -p "${READBACK_DIR}" "${CTX_DIR}"
 
 for row in "${IMAGES[@]}"; do
-    name="${row%%:*}"
-    rest="${row#*:}"
-    prefixes="${rest%%:*}"
-    from_key="${rest##*:}"
+    IFS='|' read -r name prefixes from_key <<<"${row}"
     selected "${name}" || continue
 
     DF_DIR="${HERE}/${name}"
