@@ -14,7 +14,7 @@ rules that apply to a release of mica-build-env are this file at its tag.
   <reference>` rows sorted by source, name and platform:
   - source `mica-build-env`, each build-env image (`base`, `c`, `go`, `rust`):
     `index` as
-    `ghcr.io/micaoss/mica-build-env:<image>.inputs-<16 hex>@sha256:<64 hex>`,
+    `ghcr.io/micaoss/mica-build-env:<image>.<YYYYMMDD-HHMM>@sha256:<64 hex>`,
     and `amd64` and `arm64` as `ghcr.io/micaoss/mica-build-env@sha256:<64 hex>`,
     the platform manifests;
   - source `upstream`, each upstream image of `locks/upstream.lock` (section 2)
@@ -81,7 +81,10 @@ rules that apply to a release of mica-build-env are this file at its tag.
   | `image mica-build-env go` | go, on c | Go (source `go`), cgo through c, `GOTOOLCHAIN=local` |
   | `image mica-build-env rust` | rust, on c | rustc, cargo, clippy and rustfmt (source `rust`), std (source `rust-std`) and a linker for the other architecture, cargo-nextest and cargo-deny (sources `cargo-nextest`, `cargo-deny`), dbus-daemon |
 
-- The tag is `<image>.inputs-<16 hex>`: a hash of the image's inputs from
+- Each release tags every image `<image>.<YYYYMMDD-HHMM>` (for example
+  `rust.20260915-0030`), and its lock names that tag. An image that did not
+  change keeps its digest under the new release's tag.
+- Whether an image is rebuilt is decided by `<image>.inputs-<16 hex>`: a hash of the image's inputs from
   `locks/upstream.lock` and `params.env`, its parent's inputs tag (the
   `debian:trixie-slim` reference for base), its Dockerfile, its
   dockerignore allow-list and `lib/`. An image is rebuilt only when those

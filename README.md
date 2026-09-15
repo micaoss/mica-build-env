@@ -41,7 +41,7 @@ publishes nothing. A consumer pins the tag and the sha256 of `SHA256SUMS`.
 
 ```sh
 bash from.sh --check                              # locks/upstream.lock and params.env
-bash publish-images.sh --resolve --out images.out # the images this commit names, if published
+bash publish-images.sh --resolve <release> --out images.out   # the images a release tagged, if published
 bash tests/publish-test.sh                        # the lock vectors, which inputs move which image, every release refusal
 docker run --rm -v "$PWD:/repo:ro" -w /repo "$(bash from.sh --ref upstream:rhysd/actionlint:1.7.12)"   # the workflows
 ```

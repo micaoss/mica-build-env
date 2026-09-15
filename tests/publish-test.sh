@@ -32,17 +32,18 @@ g add -A
 g commit -q -m fixture
 
 # ------------------------------------------------------------ stubs
-# docker is a registry in ${STUB_REG}: blobs/<digest> holds manifest bytes, and
-# `imagetools inspect [--raw]` answers from it; a build-env `<image>.inputs-*` tag
-# that is published (any with STUB_ALL=1, else those listed in STUB_PUBLISHED)
-# is an index generated from its tag, so a changed tag changes its children's
-# inputs as a real one does.
+# docker is a registry in ${STUB_REG}: blobs/<digest> holds manifest bytes and
+# tags/<ref with / written %> the digest a tag names; `imagetools inspect [--raw]`
+# answers from it. A build-env `<image>.inputs-*` tag that is published (any with
+# STUB_ALL=1, else those listed in STUB_PUBLISHED) is an index generated from its
+# tag, so a changed tag changes its children's inputs as a real one does.
+# `imagetools create -t <tag> <src@digest>` points the tag at the source digest.
 STUBS="${WORK}/stubs"
 LOG="${WORK}/calls"
 UP="${WORK}/uploaded"
 PUBLISHED="${WORK}/published"
 REG="${WORK}/registry"
-mkdir -p "${STUBS}" "${UP}" "${REG}/blobs"
+mkdir -p "${STUBS}" "${UP}" "${REG}/blobs" "${REG}/tags"
 : >"${PUBLISHED}"
 cat >"${STUBS}/mkindex" <<'STUB'
 #!/usr/bin/env bash
@@ -69,6 +70,7 @@ echo "docker $*" >>"${STUB_LOG}"
 resolve() { # resolve <ref>: the digest it names, or fail
     local ref="$1" tag
     case "${ref}" in *@sha256:*) [ -f "${STUB_REG}/blobs/${ref##*@}" ] && echo "${ref##*@}"; return ;; esac
+    [ ! -f "${STUB_REG}/tags/${ref//\//%}" ] || { cat "${STUB_REG}/tags/${ref//\//%}"; return; }
     tag="${ref##*:}"
     case "${tag}" in
     *.inputs-*)
@@ -86,6 +88,10 @@ inspect)
         d="$(resolve "$4")" || exit 1
         printf 'Name: %s\nMediaType: application/vnd.oci.image.index.v1+json\nDigest: %s\n' "$4" "${d}"
     fi ;;
+create)
+    [ "$4" = -t ] && [ "$#" = 6 ] || { echo "stub docker: create takes -t <tag> <source> here" >&2; exit 2; }
+    d="$(resolve "$6")" || { echo "stub docker: no source $6" >&2; exit 1; }
+    printf '%s\n' "${d}" >"${STUB_REG}/tags/${5//\//%}" ;;
 *) echo "stub docker: unexpected $*" >&2; exit 2 ;;
 esac
 STUB
@@ -177,52 +183,7 @@ check_refusal "one source at two versions is refused" "pins go at 1.26.7 and 1.0
 sed -i "s/^source${TAB}go${TAB}amd64${TAB}[^${TAB}]*${TAB}/&x/" "${BE}/locks/upstream.lock"
 check_refusal "a lock that breaks the file rules is refused by its rule" "locks/upstream.lock is refused field-value"
 
-# ------------------------------------------------------------ publish-images.sh --resolve
-resolve() { # resolve OUT: exit status of --resolve, its output in ${WORK}/resolve.out
-    : >"${LOG}"
-    rm -f "$1"
-    (cd "${BE}" && bash publish-images.sh --resolve --out "$1") >"${WORK}/resolve.out" 2>&1
-}
-
-if resolve "${WORK}/none.rows"; then
-    fail "--resolve succeeds with nothing published"
-elif says "${WORK}/resolve.out" "mica-build-env:base.inputs-"; then
-    pass "--resolve with nothing published refuses at base"
-else
-    fail "--resolve with nothing published: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
-fi
-base_tag="$(sed -n 's/.*mica-build-env:\(base\.inputs-[0-9a-f]*\).*/\1/p' "${WORK}/resolve.out" | head -n1)"
-printf '%s\n' "${base_tag}" >"${PUBLISHED}"
-if ! resolve "${WORK}/base.rows" && says "${WORK}/resolve.out" "mica-build-env:c.inputs-.* (c) is not published"; then
-    pass "--resolve with only base published refuses at c"
-else
-    fail "--resolve with only base published: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
-fi
-if says "${LOG}" "imagetools create" || says "${LOG}" "buildx build"; then fail "--resolve builds or pushes: $(cat "${LOG}")"; else pass "--resolve builds and pushes nothing"; fi
-
 export STUB_ALL=1
-if STUB_PLATFORMS=amd64 resolve "${WORK}/amd64.rows"; then
-    fail "--resolve accepts an index without an arm64 manifest"
-elif says "${WORK}/resolve.out" "lists no linux/arm64 manifest"; then
-    pass "--resolve refuses an index that lists no arm64 manifest"
-else
-    fail "--resolve amd64 only: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
-fi
-if resolve "${WORK}/good.rows"; then pass "--resolve writes the image rows once every image is published"; else fail "--resolve: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"; fi
-shape="$(while IFS="${TAB}" read -r kind source name platform ref; do
-    if [ "${kind}" = image ] && [ "${source}" = mica-build-env ] && { { [ "${platform}" = index ] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env:${name}\.inputs-[0-9a-f]{16}@sha256:[0-9a-f]{64}$ ]]; } ||
-        { [[ "${platform}" =~ ^(amd64|arm64)$ ]] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env@sha256:[0-9a-f]{64}$ ]]; }; }; then
-        printf '%s:%s ' "${name}" "${platform}"
-    else
-        printf 'bad:%s ' "${name}"
-    fi
-done <"${WORK}/good.rows")"
-if [ "${shape}" = "base:index base:amd64 base:arm64 c:index c:amd64 c:arm64 go:index go:amd64 go:arm64 rust:index rust:amd64 rust:arm64 " ]; then
-    pass "the image rows name mica-build-env, each image's index by its inputs tag and its amd64 and arm64 manifests by digest"
-else
-    fail "the image rows: ${shape}"
-fi
-
 # ------------------------------------------------------------ publish-images.sh --plan and --build refusals
 plan() { # plan OUT: exit status of --plan, output in ${WORK}/plan.out
     : >"${LOG}"
@@ -258,13 +219,76 @@ build_refusal() { # build_refusal LABEL PATTERN ARGS...: --build/--merge refuse 
 case "$(uname -m)" in x86_64) other=arm64 ;; *) other=amd64 ;; esac
 build_refusal "--build for another architecture is refused: no emulation" "images are built natively, not emulated" --build "${other}" "${WORK}/none.plan"
 sed 's/^\(go [^ ]*\)[0-9a-f] /\1x /' "${WORK}/none.plan" >"${WORK}/stale.plan"
-build_refusal "--merge with a plan of other inputs is refused" "these inputs are" --merge "${WORK}/stale.plan"
-build_refusal "--merge with an empty plan is refused" "missing or empty" --merge "${WORK}/empty.plan"
+build_refusal "--merge with a plan of other inputs is refused" "these inputs are" --merge "${WORK}/stale.plan" 20260102-0304
+build_refusal "--merge with an empty plan is refused" "missing or empty" --merge "${WORK}/empty.plan" 20260102-0304
+build_refusal "--merge with a release that is not YYYYMMDD-HHMM is refused" "is not YYYYMMDD-HHMM" --merge "${WORK}/all.plan" v0.0.1
 
-moved() { # moved LABEL EXPECTED: resolve after a change, compare the images whose rows moved, restore the tree
+# ------------------------------------------------------------ publish-images.sh --merge tags the release, --resolve names it
+R=20260102-0304
+resolve() { # resolve RELEASE OUT: exit status of --resolve, its output in ${WORK}/resolve.out
+    : >"${LOG}"
+    rm -f "$2"
+    (cd "${BE}" && bash publish-images.sh --resolve "$1" --out "$2") >"${WORK}/resolve.out" 2>&1
+}
+merge() { # merge PLAN RELEASE: exit status of --merge, its output in ${WORK}/merge.out
+    : >"${LOG}"
+    (cd "${BE}" && bash publish-images.sh --merge "$1" "$2") >"${WORK}/merge.out" 2>&1
+}
+if resolve "${R}" "${WORK}/none.rows"; then
+    fail "--resolve succeeds before the release tags exist"
+elif says "${WORK}/resolve.out" "mica-build-env:base.${R} (base) is not published"; then
+    pass "--resolve refuses an image not tagged for the release, naming <image>.<release>"
+else
+    fail "--resolve before tagging: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
+fi
+if says "${LOG}" "imagetools create" || says "${LOG}" "buildx build"; then fail "--resolve builds or pushes: $(cat "${LOG}")"; else pass "--resolve builds and pushes nothing"; fi
+if merge "${WORK}/all.plan" "${R}" && [ "$(grep -c "imagetools create -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${R} ghcr.io/micaoss/mica-build-env:[a-z]*\.inputs-[0-9a-f]*@sha256:" "${LOG}")" = 4 ]; then
+    pass "--merge tags every image <image>.<release> at its inputs digest, built or not"
+else
+    fail "--merge: $(tail -n3 "${WORK}/merge.out" | tr '\n' ' ') $(grep -c 'imagetools create' "${LOG}")"
+fi
+merge "${WORK}/all.plan" "${R}" && ! says "${LOG}" "imagetools create" && pass "... a rerun re-tags nothing" || fail "... rerun: $(cat "${LOG}")"
+if resolve "${R}" "${WORK}/good.rows"; then pass "--resolve writes the image rows once every image is tagged"; else fail "--resolve: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"; fi
+shape="$(while IFS="${TAB}" read -r kind source name platform ref; do
+    if [ "${kind}" = image ] && [ "${source}" = mica-build-env ] && { { [ "${platform}" = index ] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env:${name}\.${R}@sha256:[0-9a-f]{64}$ ]]; } ||
+        { [[ "${platform}" =~ ^(amd64|arm64)$ ]] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env@sha256:[0-9a-f]{64}$ ]]; }; }; then
+        printf '%s:%s ' "${name}" "${platform}"
+    else
+        printf 'bad:%s ' "${name}"
+    fi
+done <"${WORK}/good.rows")"
+if [ "${shape}" = "base:index base:amd64 base:arm64 c:index c:amd64 c:arm64 go:index go:amd64 go:arm64 rust:index rust:amd64 rust:arm64 " ]; then
+    pass "the image rows name mica-build-env, each image's index as <image>.<release> and its amd64 and arm64 manifests by digest"
+else
+    fail "the image rows: ${shape}"
+fi
+GO_TAG="${REG}/tags/ghcr.io%micaoss%mica-build-env:go.${R}"
+cp "${GO_TAG}" "${WORK}/go.tag"
+mkindex other amd64,arm64 >"${GO_TAG}"
+if merge "${WORK}/all.plan" "${R}"; then
+    fail "--merge accepts a release tag that holds another digest"
+elif says "${WORK}/merge.out" "go.${R} already holds .* never re-pointed" && ! says "${LOG}" "imagetools create"; then
+    pass "--merge refuses a release tag that holds another digest, without re-pointing it"
+else
+    fail "--merge over another digest: $(tail -n2 "${WORK}/merge.out" | tr '\n' ' ')"
+fi
+if ! resolve "${R}" "${WORK}/x.rows" && says "${WORK}/resolve.out" "go.${R} is sha256:.*, which is not .*go.inputs-"; then
+    pass "--resolve refuses a release tag that is not the image these inputs name"
+else
+    fail "--resolve with another go: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
+fi
+cp "${WORK}/go.tag" "${GO_TAG}"
+if STUB_PLATFORMS=amd64 merge "${WORK}/all.plan" 20260102-0305 && ! STUB_PLATFORMS=amd64 resolve 20260102-0305 "${WORK}/amd64.rows" &&
+    says "${WORK}/resolve.out" "lists no linux/arm64 manifest"; then
+    pass "--resolve refuses an index that lists no arm64 manifest"
+else
+    fail "--resolve amd64 only: $(tail -n2 "${WORK}/resolve.out" "${WORK}/merge.out" | tr '\n' ' ')"
+fi
+
+moved() { # moved LABEL EXPECTED: plan after a change, compare the images whose inputs tags moved, restore the tree
     local got
-    resolve "${WORK}/moved.rows" || true
-    got="$({ diff "${WORK}/good.rows" "${WORK}/moved.rows" || true; } | awk -F"${TAB}" '/^> image/ && $4 == "index" {print $3}' | sort | tr '\n' ' ' | sed 's/ $//')"
+    plan "${WORK}/moved.plan" || true
+    got="$(awk 'NR == FNR { t[$1] = $2; next } t[$1] != $2 { print $1 }' "${WORK}/all.plan" "${WORK}/moved.plan" | sort | tr '\n' ' ' | sed 's/ $//')"
     if [ "${got}" = "$2" ]; then pass "$1 -> moves: ${2:-none}"; else fail "$1 -> moves: '${got}', want '$2'"; fi
     g checkout -q -- .
 }

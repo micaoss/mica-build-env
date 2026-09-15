@@ -4,8 +4,11 @@
 #
 #   bash publish-images.sh --plan <file>              which images these inputs still need, by tag
 #   bash publish-images.sh --build <arch> <plan>      build them natively for <arch> and push <image>.<arch>.build-<commit12>
-#   bash publish-images.sh --merge <plan>             merge both architectures into <image>.inputs-<16> and .build-<commit12>
-#   bash publish-images.sh --resolve --out <file>     build nothing; write the image rows or refuse if an image is not published
+#   bash publish-images.sh --merge <plan> <release>   merge both architectures into <image>.inputs-<16> and .build-<commit12>,
+#                                                     then tag every image <image>.<release>
+#   bash publish-images.sh --resolve <release> --out <file>
+#                                                     build nothing; write the image rows naming <image>.<release>,
+#                                                     or refuse if an image is not published under it
 #
 # Publishing is CI's: .github/workflows/release.yml runs --plan, then --build on
 # an amd64 and an arm64 runner, then --merge, when a release is published
@@ -15,8 +18,10 @@
 # Dockerfile, dockerignore and the scripts that allow-list admits, and lib/; the
 # image is this repository's package tagged <image>.inputs-<sha256 prefix> of
 # them. An image is built when that tag is not published or its parent is built
-# in the same plan; a published tag is never re-pointed. Every row written names
-# a digest that reads with no credential.
+# in the same plan. Each release then tags every image <image>.<release> (the
+# same digest when the image did not change), and its lock names that tag; a
+# published tag is never re-pointed. Every row written names a digest that reads
+# with no credential.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,15 +38,16 @@ IMAGES=(
     "rust|RUST_,RUSTCHECK_|c"
 )
 
-USAGE="usage: bash publish-images.sh --plan <file> | --build <amd64|arm64> <plan> | --merge <plan> | --resolve --out <file>"
+USAGE="usage: bash publish-images.sh --plan <file> | --build <amd64|arm64> <plan> | --merge <plan> <release> | --resolve <release> --out <file>"
 MODE=""
 case "${1-}" in
 --plan) [ "$#" -eq 2 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=plan; PLAN="$2" ;;
 --build) [ "$#" -eq 3 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=build; ARCH="$2"; PLAN="$3" ;;
---merge) [ "$#" -eq 2 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=merge; PLAN="$2" ;;
---resolve) [ "$#" -eq 3 ] && [ "$2" = --out ] || { echo "${USAGE}" >&2; exit 1; }; MODE=resolve; OUT="$3" ;;
+--merge) [ "$#" -eq 3 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=merge; PLAN="$2"; RELEASE="$3" ;;
+--resolve) [ "$#" -eq 4 ] && [ "$3" = --out ] || { echo "${USAGE}" >&2; exit 1; }; MODE=resolve; RELEASE="$2"; OUT="$4" ;;
 *) echo "${USAGE}" >&2; exit 1 ;;
 esac
+[[ "${RELEASE-00000000-0000}" =~ ^[0-9]{8}-[0-9]{4}$ ]] || { echo "error: the release '${RELEASE}' is not YYYYMMDD-HHMM" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "error: docker is required and not on PATH" >&2; exit 1; }
 
 pins_load || exit 1
@@ -205,6 +211,23 @@ merge)
         }
         echo "publish-images: merged ${REPOSITORY}:${TAG[${name}]}@${digest}" >&2
     done
+    # Every image, built now or published before, under this release's tag.
+    for row in "${IMAGES[@]}"; do
+        name="${row%%|*}"
+        digest="$(anon_digest "${REPOSITORY}:${TAG[${name}]}")" && [ -n "${digest}" ] || {
+            echo "error: ${REPOSITORY}:${TAG[${name}]} (${name}) does not read anonymously, so it cannot be tagged for ${RELEASE}" >&2
+            exit 1
+        }
+        rel="${REPOSITORY}:${name}.${RELEASE}"
+        if existing="$(index_digest "${rel}")" && [ -n "${existing}" ]; then
+            [ "${existing}" = "${digest}" ] || { echo "error: ${rel} already holds ${existing}, not ${digest}; a published tag is never re-pointed" >&2; exit 1; }
+            echo "publish-images: ${rel} is tagged" >&2
+        else
+            docker buildx imagetools create -t "${rel}" "${REPOSITORY}:${TAG[${name}]}@${digest}" >&2
+        fi
+        [ "$(anon_digest "${rel}" || true)" = "${digest}" ] || { echo "error: ${rel} does not read anonymously at ${digest}" >&2; exit 1; }
+        echo "publish-images: tagged ${rel}@${digest}" >&2
+    done
     ;;
 
 resolve)
@@ -212,13 +235,17 @@ resolve)
     : >"${OUT}"
     for row in "${IMAGES[@]}"; do
         name="${row%%|*}"
-        ref="${REPOSITORY}:${TAG[${name}]}"
+        ref="${REPOSITORY}:${name}.${RELEASE}"
         # The manifest bytes go to a file untouched: a trailing newline is part of the digest.
         DOCKER_CONFIG="${WORK}/anon" docker buildx imagetools inspect --raw "${ref}" >"${WORK}/index" 2>/dev/null && [ -s "${WORK}/index" ] || {
-            echo "error: ${ref} (${name}) is not published or does not read anonymously; the release workflow builds it for this commit's tag" >&2
+            echo "error: ${ref} (${name}) is not published or does not read anonymously; the release workflow builds and tags it for ${RELEASE}" >&2
             exit 1
         }
         digest="sha256:$(sha256sum "${WORK}/index" | cut -d' ' -f1)"
+        [ "$(anon_digest "${REPOSITORY}:${TAG[${name}]}" || true)" = "${digest}" ] || {
+            echo "error: ${ref} is ${digest}, which is not ${REPOSITORY}:${TAG[${name}]}, the image these inputs name" >&2
+            exit 1
+        }
         printf 'image\tmica-build-env\t%s\tindex\t%s@%s\n' "${name}" "${ref}" "${digest}" >>"${OUT}"
         for arch in "${ARCHES[@]}"; do
             pd="$(jq -r --arg a "${arch}" '[.manifests[]? | select(.platform.os == "linux" and .platform.architecture == $a) | .digest] | first // empty' "${WORK}/index")"

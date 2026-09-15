@@ -104,7 +104,7 @@ done < <(sort -r "${WORK}/releases")
 # The rows: the images this commit's inputs name, each read back with no
 # credential at its digest, and the upstream image rows of locks/upstream.lock
 # as they are (this repository does not republish them).
-bash "${HERE}/publish-images.sh" --resolve --out "${WORK}/images.rows" || {
+bash "${HERE}/publish-images.sh" --resolve "${TAG}" --out "${WORK}/images.rows" || {
     echo "error: the build-env images of ${HEAD} are not all published; the images job publishes them for ${TAG}; nothing was attached" >&2
     exit 1
 }

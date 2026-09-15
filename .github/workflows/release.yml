@@ -3,7 +3,8 @@ name: release
 # --target <commit>`), building from the release's tag. The plan job lists the
 # build-env images these inputs do not have yet; one job per architecture builds
 # them natively on its own runner and pushes <image>.<arch>.build-<commit12>; the
-# merge job joins both into the multi-arch <image>.inputs-<16>; the assets job
+# merge job joins both into the multi-arch <image>.inputs-<16> and tags every image
+# <image>.<release>; the assets job
 # attaches mica-build-env.lock (mica-lock v1) and SHA256SUMS to the release.
 on:
   release:
@@ -94,8 +95,8 @@ jobs:
           set -euo pipefail
           printf '%s' "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           printf '%s\n' "${PLAN}" >"$RUNNER_TEMP/plan"
-          bash publish-images.sh --merge "$RUNNER_TEMP/plan"
-          bash publish-images.sh --resolve --out "$RUNNER_TEMP/images.rows"
+          bash publish-images.sh --merge "$RUNNER_TEMP/plan" "${TAG}"
+          bash publish-images.sh --resolve "${TAG}" --out "$RUNNER_TEMP/images.rows"
           {
             echo "Image rows:"
             echo '```'
