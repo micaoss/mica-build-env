@@ -81,17 +81,18 @@ rules that apply to a release of mica-build-env are this file at its tag.
   | `image mica-build-env go` | go, on c | Go (source `go`), cgo through c, `GOTOOLCHAIN=local` |
   | `image mica-build-env rust` | rust, on c | rustc, cargo, clippy and rustfmt (source `rust`), std (source `rust-std`) and a linker for the other architecture, cargo-nextest and cargo-deny (sources `cargo-nextest`, `cargo-deny`), dbus-daemon |
 
-- Each release tags every image `<image>.<YYYYMMDD-HHMM>` (for example
-  `rust.20260915-0030`), and its lock names that tag. An image that did not
-  change keeps its digest under the new release's tag.
-- Whether an image is rebuilt is decided by `<image>.inputs-<16 hex>`: a hash of the image's inputs from
-  `locks/upstream.lock` and `params.env`, its parent's inputs tag (the
-  `debian:trixie-slim` reference for base), its Dockerfile, its
-  dockerignore allow-list and `lib/`. An image is rebuilt only when those
-  inputs change or its parent is rebuilt, which also rebuilds every image
-  built on it; a tag that exists is never re-pointed. Each index is also tagged
-  `<image>.build-<commit12>`; the per-architecture sources are
-  `<image>.<arch>.build-<commit12>`.
+- Every tag is the release that published it: each release tags every image
+  `<image>.<YYYYMMDD-HHMM>` (for example `rust.20260915-0030`), and its lock
+  names that tag; the per-architecture sources are
+  `<image>.<arch>.<YYYYMMDD-HHMM>`. No tag carries a hash or a commit.
+- An image's inputs are its rows of `locks/upstream.lock` and its keys of
+  `params.env`, its parent's inputs (the `debian:trixie-slim` reference for
+  base), its Dockerfile, its dockerignore allow-list and `lib/`; their sha256
+  is the index annotation `com.mica.build-env.inputs`. An image is rebuilt only
+  when no release tag of it carries these inputs or its parent is rebuilt,
+  which also rebuilds every image built on it; otherwise the new release tags
+  the published index, so an unchanged image keeps its digest. A tag that
+  exists is never re-pointed.
 - Each image asserts what it promises while it builds (`<image>/assert.sh`) and
   records what it resolved to in `/etc/mica-build/<image>.env`. Versions
   installed from a sha256-pinned archive are asserted exactly. Versions
@@ -120,14 +121,17 @@ rules that apply to a release of mica-build-env are this file at its tag.
     `Mica-Source-Repo` and `Mica-Source-Commit` control fields of a `.deb`,
     the release notes, or the OCI annotations below).
 - When the transport is OCI:
-  - a tag says what the artifact is: `<kind>[.<name>]*.build-<commit12>`;
+  - a tag says what the artifact is and which release published it:
+    `<kind>[.<name>]*.<YYYYMMDD-HHMM>`, the release's tag exactly, never a
+    commit or a hash;
 
     | Kind | Tag | artifactType |
     | --- | --- | --- |
-    | source | `<repository>:source.build-<c12>` | `application/vnd.mica.source` |
-    | pool | `<repository>:pool.<arch>.build-<c12>` | `application/vnd.mica.pool` |
-    | board | `mica-boards:board.<board>.build-<c12>` | `application/vnd.mica.board` |
-    | root | `mica-build:root.<product>.build-<c12>` | `application/vnd.mica.root` |
+    | image | `mica-build-env:<image>.<release>` | (image index) |
+    | source | `<repository>:source.<release>` | `application/vnd.mica.source` |
+    | pool | `<repository>:pool.<arch>.<release>` | `application/vnd.mica.pool` |
+    | board | `mica-boards:board.<board>.<release>` | `application/vnd.mica.board` |
+    | root | `mica-build:root.<product>.<release>` | `application/vnd.mica.root` |
 
   - a manifest is an OCI image manifest with an empty config, annotated with
     `org.opencontainers.image.revision` (the full commit),

@@ -1,31 +1,32 @@
 #!/usr/bin/env bash
-# Publish the build-env images to GHCR as multi-architecture images and write
-# their image rows of mica-build-env.lock (mica-lock v1): index, amd64 and arm64 per image.
+# Publish the build-env images to GHCR as multi-architecture images tagged with
+# the release, and write their image rows of mica-build-env.lock (mica-lock v1):
+# index, amd64 and arm64 per image.
 #
-#   bash publish-images.sh --plan <file>              which images these inputs still need, by tag
-#   bash publish-images.sh --build <arch> <plan>      build them natively for <arch> and push <image>.<arch>.build-<commit12>
-#   bash publish-images.sh --merge <plan> <release>   merge both architectures into <image>.inputs-<16> and .build-<commit12>,
-#                                                     then tag every image <image>.<release>
-#   bash publish-images.sh --resolve <release> --out <file>
-#                                                     build nothing; write the image rows naming <image>.<release>,
-#                                                     or refuse if an image is not published under it
+#   bash publish-images.sh --plan <file>                       which images these inputs need built, and which are published already
+#   bash publish-images.sh --build <arch> <release> <plan>     build them natively for <arch> and push <image>.<arch>.<release>
+#   bash publish-images.sh --merge <release> <plan>            publish every image as <image>.<release>
+#   bash publish-images.sh --resolve <release> --out <file>    build nothing; write the image rows of <release> or refuse
 #
 # Publishing is CI's: .github/workflows/release.yml runs --plan, then --build on
 # an amd64 and an arm64 runner, then --merge, when a release is published
 # (`docker login ghcr.io` with packages: write). base builds on
-# debian:trixie-slim (locks/upstream.lock), c on base, go and rust on c. An image's inputs are its
-# keys of locks/upstream.lock and params.env (pins.sh), its parent's inputs tag (or the upstream reference for base), its
-# Dockerfile, dockerignore and the scripts that allow-list admits, and lib/; the
-# image is this repository's package tagged <image>.inputs-<sha256 prefix> of
-# them. An image is built when that tag is not published or its parent is built
-# in the same plan. Each release then tags every image <image>.<release> (the
-# same digest when the image did not change), and its lock names that tag; a
-# published tag is never re-pointed. Every row written names a digest that reads
-# with no credential.
+# debian:trixie-slim (locks/upstream.lock), c on base, go and rust on c.
+#
+# Every tag is a release: <image>.<release> (for example rust.20260915-0030).
+# An image's inputs are its keys of locks/upstream.lock and params.env
+# (pins.sh), its parent's inputs (or the upstream reference for base), its
+# Dockerfile, dockerignore and the scripts that allow-list admits, and lib/;
+# their sha256 is the index annotation com.mica.build-env.inputs. An image is
+# built when no release tag of it carries these inputs, or its parent is built
+# in the same plan; otherwise the release tags the published index it finds, so
+# an unchanged image keeps its digest. A published tag is never re-pointed, and
+# every row written names a digest that reads with no credential.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY="${MICA_IMAGES_REPOSITORY:-ghcr.io/micaoss/mica-build-env}"
+ANNOTATION=com.mica.build-env.inputs
 # shellcheck source=pins.sh
 . "${HERE}/pins.sh"
 ARCHES=(amd64 arm64)
@@ -38,23 +39,26 @@ IMAGES=(
     "rust|RUST_,RUSTCHECK_|c"
 )
 
-USAGE="usage: bash publish-images.sh --plan <file> | --build <amd64|arm64> <plan> | --merge <plan> <release> | --resolve <release> --out <file>"
+USAGE="usage: bash publish-images.sh --plan <file> | --build <amd64|arm64> <release> <plan> | --merge <release> <plan> | --resolve <release> --out <file>"
 MODE=""
+RELEASE=""
 case "${1-}" in
 --plan) [ "$#" -eq 2 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=plan; PLAN="$2" ;;
---build) [ "$#" -eq 3 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=build; ARCH="$2"; PLAN="$3" ;;
---merge) [ "$#" -eq 3 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=merge; PLAN="$2"; RELEASE="$3" ;;
+--build) [ "$#" -eq 4 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=build; ARCH="$2"; RELEASE="$3"; PLAN="$4" ;;
+--merge) [ "$#" -eq 3 ] || { echo "${USAGE}" >&2; exit 1; }; MODE=merge; RELEASE="$2"; PLAN="$3" ;;
 --resolve) [ "$#" -eq 4 ] && [ "$3" = --out ] || { echo "${USAGE}" >&2; exit 1; }; MODE=resolve; RELEASE="$2"; OUT="$4" ;;
 *) echo "${USAGE}" >&2; exit 1 ;;
 esac
-[[ "${RELEASE-00000000-0000}" =~ ^[0-9]{8}-[0-9]{4}$ ]] || { echo "error: the release '${RELEASE}' is not YYYYMMDD-HHMM" >&2; exit 1; }
-command -v docker >/dev/null 2>&1 || { echo "error: docker is required and not on PATH" >&2; exit 1; }
+[ "${MODE}" = plan ] || [[ "${RELEASE}" =~ ^[0-9]{8}-[0-9]{4}$ ]] || { echo "error: the release '${RELEASE}' is not YYYYMMDD-HHMM" >&2; exit 1; }
+for t in docker jq curl sha256sum; do
+    command -v "${t}" >/dev/null 2>&1 || { echo "error: ${t} is required and not on PATH" >&2; exit 1; }
+done
 
 pins_load || exit 1
 STRIPPED="${PINS}"
 
-# inputs_tag <image> <prefixes> <parent inputs tag or base image pin>
-inputs_tag() {
+# inputs_of <image> <prefixes> <parent inputs or base image pin>: the sha256 of the image's inputs.
+inputs_of() {
     local name="$1" prefixes="$2" parent="$3" p f sha
     local -a pfx files
     IFS=',' read -r -a pfx <<<"${prefixes}"
@@ -69,76 +73,111 @@ inputs_tag() {
         for f in "${files[@]}"; do cat "${name}/${f}"; done
         cat lib/*
     )"
-    sha="$(printf '%s\n' "${sha}" | sha256sum | cut -d' ' -f1)"
-    printf '%s.inputs-%s\n' "${name}" "${sha:0:16}"
+    printf '%s\n' "${sha}" | sha256sum | cut -d' ' -f1
 }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 mkdir -p "${WORK}/anon"
 
+# raw <ref> <file>: the manifest bytes of <ref>, read with no credential, into
+# <file> byte for byte (a trailing newline is part of the digest); prints their digest.
+raw() {
+    DOCKER_CONFIG="${WORK}/anon" docker buildx imagetools inspect --raw "$1" >"$2" 2>/dev/null && [ -s "$2" ] || return 1
+    printf 'sha256:%s\n' "$(sha256sum "$2" | cut -d' ' -f1)"
+}
 # Captured whole before parsing: a pipe into awk would break under pipefail.
 index_digest() {
     local out
     out="$(docker buildx imagetools inspect "$1" 2>/dev/null)" || return 1
     printf '%s\n' "${out}" | awk '/^Digest:[[:space:]]/{print $2; exit}'
 }
-# Public, always: read with an empty docker configuration.
-anon_digest() { DOCKER_CONFIG="${WORK}/anon" index_digest "$1"; }
 
-clean_commit() {
-    command -v git >/dev/null 2>&1 || { echo "error: git is required and not on PATH" >&2; exit 1; }
-    [ -z "$(git -C "${HERE}" status --porcelain)" ] || {
-        echo "error: ${HERE} has uncommitted changes; the published tags name a commit, so they are built from a clean one" >&2
-        exit 1
-    }
-    COMMIT="$(git -C "${HERE}" rev-parse HEAD)"
+# release_tags <image>: the <image>.<YYYYMMDD-HHMM> tags of the package, newest first,
+# listed with no credential through the registry's tags API.
+release_tags() {
+    local host="${REPOSITORY%%/*}" path="${REPOSITORY#*/}" token url next
+    token="$(curl -fsSL "https://${host}/token?scope=repository:${path}:pull&service=${host}" | jq -r '.token // empty')" || return 1
+    url="https://${host}/v2/${path}/tags/list?n=1000"
+    : >"${WORK}/tags"
+    while [ -n "${url}" ]; do
+        curl -fsSL -D "${WORK}/headers" -H "Authorization: Bearer ${token}" -o "${WORK}/page" "${url}" || return 1
+        jq -r '.tags[]?' "${WORK}/page" >>"${WORK}/tags"
+        next="$(sed -n 's/^[Ll]ink: *<\([^>]*\)>; *rel="next".*/\1/p' "${WORK}/headers" | tr -d '\r')"
+        url="${next:+https://${host}${next}}"
+    done
+    grep -E "^${1}\.[0-9]{8}-[0-9]{4}\$" "${WORK}/tags" | LC_ALL=C sort -r || true
 }
 
-# Every image's tag, parents first: TAG[<image>].
-declare -A TAG=() PARENT=()
+clean_tree() {
+    command -v git >/dev/null 2>&1 || { echo "error: git is required and not on PATH" >&2; exit 1; }
+    [ -z "$(git -C "${HERE}" status --porcelain)" ] || {
+        echo "error: ${HERE} has uncommitted changes; a release is built from its clean commit" >&2
+        exit 1
+    }
+}
+
+# Every image's inputs, parents first: INPUTS[<image>].
+declare -A INPUTS=() PARENT=()
 for row in "${IMAGES[@]}"; do
     IFS='|' read -r name prefixes parent <<<"${row}"
     case "${parent}" in
     upstream:*) from="$(upstream_ref "${parent#upstream:}")" || exit 1 ;;
-    *) from="${TAG[${parent}]}" ;;
+    *) from="${INPUTS[${parent}]}" ;;
     esac
     [ -n "${from}" ] || { echo "error: ${name}'s parent ${parent} resolved to nothing" >&2; exit 1; }
-    TAG["${name}"]="$(inputs_tag "${name}" "${prefixes}" "${from}")"
+    INPUTS["${name}"]="$(inputs_of "${name}" "${prefixes}" "${from}")"
     PARENT["${name}"]="${parent}"
 done
 
-# read_plan <file>: ACTION[<image>] from a plan whose tags are this tree's.
-declare -A ACTION=()
+# read_plan <file>: ACTION[<image>] (build or published) and SOURCE[<image>] (the
+# published <image>.<release>@<digest>) from a plan whose inputs are this tree's.
+declare -A ACTION=() SOURCE=()
 read_plan() {
-    local name tag action
+    local name inputs action source
     [ -s "$1" ] || { echo "error: the plan $1 is missing or empty" >&2; exit 1; }
-    while read -r name tag action; do
-        [ "${TAG[${name}]-}" = "${tag}" ] || { echo "error: the plan $1 names ${name} as ${tag}, but these inputs are ${TAG[${name}]-nothing}" >&2; exit 1; }
-        case "${action}" in build | published) ACTION["${name}"]="${action}" ;; *) echo "error: the plan $1 gives ${name} the action '${action}'" >&2; exit 1 ;; esac
+    while read -r name inputs action source; do
+        [ "${INPUTS[${name}]-}" = "${inputs}" ] || { echo "error: the plan $1 names ${name} with the inputs ${inputs}, but these inputs are ${INPUTS[${name}]-nothing}" >&2; exit 1; }
+        case "${action}:${source}" in
+        build:) ;;
+        published:"${REPOSITORY}:${name}".[0-9]*@sha256:*) ;;
+        *) echo "error: the plan $1 gives ${name} the action '${action} ${source}'" >&2; exit 1 ;;
+        esac
+        ACTION["${name}"]="${action}" SOURCE["${name}"]="${source}"
     done <"$1"
     for row in "${IMAGES[@]}"; do
         [ -n "${ACTION[${row%%|*}]-}" ] || { echo "error: the plan $1 does not name ${row%%|*}" >&2; exit 1; }
     done
 }
 
+# inputs_annotation <manifest file>: the inputs an index was published for.
+inputs_annotation() { jq -r --arg k "${ANNOTATION}" '.annotations[$k] // empty' "$1"; }
+
 case "${MODE}" in
 plan)
-    declare -A BUILD=()
     : >"${PLAN}"
     for row in "${IMAGES[@]}"; do
         name="${row%%|*}"
         parent="${PARENT[${name}]}"
-        if [ -n "${BUILD[${parent}]-}" ]; then
+        found=""
+        if [ "${ACTION[${parent}]-}" = build ]; then
             echo "publish-images: ${name} builds because its parent ${parent} does" >&2
-            BUILD["${name}"]=1
-        elif digest="$(anon_digest "${REPOSITORY}:${TAG[${name}]}")" && [ -n "${digest}" ]; then
-            echo "publish-images: ${REPOSITORY}:${TAG[${name}]} is published" >&2
         else
-            echo "publish-images: ${REPOSITORY}:${TAG[${name}]} is not published; ${name} builds" >&2
-            BUILD["${name}"]=1
+            tags="$(release_tags "${name}")" || { echo "error: the tags of ${REPOSITORY} could not be listed anonymously" >&2; exit 1; }
+            for t in ${tags}; do
+                d="$(raw "${REPOSITORY}:${t}" "${WORK}/index")" || continue
+                [ "$(inputs_annotation "${WORK}/index")" = "${INPUTS[${name}]}" ] || continue
+                found="${REPOSITORY}:${t}@${d}"
+                break
+            done
+            if [ -n "${found}" ]; then
+                echo "publish-images: ${name} is published with these inputs as ${found}" >&2
+            else
+                echo "publish-images: no release of ${name} carries these inputs; ${name} builds" >&2
+            fi
         fi
-        printf '%s %s %s\n' "${name}" "${TAG[${name}]}" "$([ -n "${BUILD[${name}]-}" ] && echo build || echo published)" >>"${PLAN}"
+        if [ -n "${found}" ]; then ACTION["${name}"]=published; else ACTION["${name}"]=build; fi
+        printf '%s %s %s%s\n' "${name}" "${INPUTS[${name}]}" "${ACTION[${name}]}" "${found:+ ${found}}" >>"${PLAN}"
     done
     ;;
 
@@ -150,7 +189,7 @@ build)
         exit 1
     }
     read_plan "${PLAN}"
-    clean_commit
+    clean_tree
     for row in "${IMAGES[@]}"; do
         name="${row%%|*}"
         [ "${ACTION[${name}]}" = build ] || continue
@@ -161,12 +200,10 @@ build)
             MICA_BUILD_PLATFORM="linux/${ARCH}" bash "${HERE}/build.sh" "${name}" >&2
             ;;
         *)
-            from="${REPOSITORY}:${TAG[${parent}]}"
-            digest="$(anon_digest "${from}")" && [ -n "${digest}" ] || { echo "error: ${from} (${name}'s parent) does not read anonymously" >&2; exit 1; }
-            MICA_BUILD_PLATFORM="linux/${ARCH}" MICA_BUILD_PARENT="${from}@${digest}" bash "${HERE}/build.sh" "${name}" >&2
+            MICA_BUILD_PLATFORM="linux/${ARCH}" MICA_BUILD_PARENT="${SOURCE[${parent}]}" bash "${HERE}/build.sh" "${name}" >&2
             ;;
         esac
-        src="${REPOSITORY}:${name}.${ARCH}.build-${COMMIT:0:12}"
+        src="${REPOSITORY}:${name}.${ARCH}.${RELEASE}"
         docker tag "localhost/mica-build-${name}:${ARCH}" "${src}"
         # A push that reports success is read back; the registry has answered
         # 404 for a tag it just accepted, so a missing tag is pushed again.
@@ -183,75 +220,56 @@ build)
 
 merge)
     read_plan "${PLAN}"
-    clean_commit
+    clean_tree
     for row in "${IMAGES[@]}"; do
         name="${row%%|*}"
-        [ "${ACTION[${name}]}" = build ] || continue
-        sources=()
-        for arch in "${ARCHES[@]}"; do
-            src="${REPOSITORY}:${name}.${arch}.build-${COMMIT:0:12}"
-            index_digest "${src}" >/dev/null || { echo "error: ${src} is not pushed; the ${arch} build job did not finish ${name}" >&2; exit 1; }
-            sources+=("${src}")
-        done
-        # The plan was made before the builds: a tag published since is not re-pointed,
-        # unless this commit's own merge made it (a rerun), which its build tag names.
-        if existing="$(index_digest "${REPOSITORY}:${TAG[${name}]}")" && [ -n "${existing}" ]; then
-            [ "$(index_digest "${REPOSITORY}:${name}.build-${COMMIT:0:12}" || true)" = "${existing}" ] || {
-                echo "error: ${REPOSITORY}:${TAG[${name}]} was published after the plan by another commit; a published tag is never re-pointed" >&2
+        rel="${REPOSITORY}:${name}.${RELEASE}"
+        if held="$(index_digest "${rel}")" && [ -n "${held}" ]; then
+            # A rerun of this release: the tag must already be these inputs.
+            raw "${rel}" "${WORK}/held" >/dev/null && [ "$(inputs_annotation "${WORK}/held")" = "${INPUTS[${name}]}" ] || {
+                echo "error: ${rel} already holds ${held}, which is not these inputs; a published tag is never re-pointed" >&2
                 exit 1
             }
-            echo "publish-images: ${REPOSITORY}:${TAG[${name}]} is this commit's merge; not re-pointed" >&2
+            echo "publish-images: ${rel} is published with these inputs; not re-pointed" >&2
+        elif [ "${ACTION[${name}]}" = build ]; then
+            sources=()
+            for arch in "${ARCHES[@]}"; do
+                src="${REPOSITORY}:${name}.${arch}.${RELEASE}"
+                index_digest "${src}" >/dev/null || { echo "error: ${src} is not pushed; the ${arch} build job did not finish ${name}" >&2; exit 1; }
+                sources+=("${src}")
+            done
+            docker buildx imagetools create --annotation "index:${ANNOTATION}=${INPUTS[${name}]}" -t "${rel}" "${sources[@]}" >&2
         else
-            docker buildx imagetools create -t "${REPOSITORY}:${TAG[${name}]}" -t "${REPOSITORY}:${name}.build-${COMMIT:0:12}" "${sources[@]}" >&2
+            docker buildx imagetools create -t "${rel}" "${SOURCE[${name}]}" >&2
         fi
-        digest="$(anon_digest "${REPOSITORY}:${TAG[${name}]}")" && [ -n "${digest}" ] || {
+        digest="$(raw "${rel}" "${WORK}/index")" && [ "$(inputs_annotation "${WORK}/index")" = "${INPUTS[${name}]}" ] || {
             package="${REPOSITORY#*/}"
-            echo "error: ${REPOSITORY}:${TAG[${name}]} was pushed and does not read anonymously. If the package is private, set it public once at https://github.com/orgs/${package%%/*}/packages/container/package/${package#*/} (Package settings, Danger Zone, Change visibility: Public) and rerun" >&2
+            echo "error: ${rel} does not read anonymously with these inputs. If the package is private, set it public once at https://github.com/orgs/${package%%/*}/packages/container/package/${package#*/} (Package settings, Danger Zone, Change visibility: Public) and rerun" >&2
             exit 1
         }
-        echo "publish-images: merged ${REPOSITORY}:${TAG[${name}]}@${digest}" >&2
-    done
-    # Every image, built now or published before, under this release's tag.
-    for row in "${IMAGES[@]}"; do
-        name="${row%%|*}"
-        digest="$(anon_digest "${REPOSITORY}:${TAG[${name}]}")" && [ -n "${digest}" ] || {
-            echo "error: ${REPOSITORY}:${TAG[${name}]} (${name}) does not read anonymously, so it cannot be tagged for ${RELEASE}" >&2
-            exit 1
-        }
-        rel="${REPOSITORY}:${name}.${RELEASE}"
-        if existing="$(index_digest "${rel}")" && [ -n "${existing}" ]; then
-            [ "${existing}" = "${digest}" ] || { echo "error: ${rel} already holds ${existing}, not ${digest}; a published tag is never re-pointed" >&2; exit 1; }
-            echo "publish-images: ${rel} is tagged" >&2
-        else
-            docker buildx imagetools create -t "${rel}" "${REPOSITORY}:${TAG[${name}]}@${digest}" >&2
-        fi
-        [ "$(anon_digest "${rel}" || true)" = "${digest}" ] || { echo "error: ${rel} does not read anonymously at ${digest}" >&2; exit 1; }
-        echo "publish-images: tagged ${rel}@${digest}" >&2
+        [ "${ACTION[${name}]}" = build ] || [ -n "${held}" ] || [ "${digest}" = "${SOURCE[${name}]##*@}" ] || { echo "error: ${rel} is ${digest}, not ${SOURCE[${name}]}" >&2; exit 1; }
+        echo "publish-images: published ${rel}@${digest}" >&2
     done
     ;;
 
 resolve)
-    command -v jq >/dev/null 2>&1 || { echo "error: jq is required and not on PATH" >&2; exit 1; }
     : >"${OUT}"
     for row in "${IMAGES[@]}"; do
         name="${row%%|*}"
         ref="${REPOSITORY}:${name}.${RELEASE}"
-        # The manifest bytes go to a file untouched: a trailing newline is part of the digest.
-        DOCKER_CONFIG="${WORK}/anon" docker buildx imagetools inspect --raw "${ref}" >"${WORK}/index" 2>/dev/null && [ -s "${WORK}/index" ] || {
-            echo "error: ${ref} (${name}) is not published or does not read anonymously; the release workflow builds and tags it for ${RELEASE}" >&2
+        digest="$(raw "${ref}" "${WORK}/index")" || {
+            echo "error: ${ref} (${name}) is not published or does not read anonymously; the release workflow publishes it for ${RELEASE}" >&2
             exit 1
         }
-        digest="sha256:$(sha256sum "${WORK}/index" | cut -d' ' -f1)"
-        [ "$(anon_digest "${REPOSITORY}:${TAG[${name}]}" || true)" = "${digest}" ] || {
-            echo "error: ${ref} is ${digest}, which is not ${REPOSITORY}:${TAG[${name}]}, the image these inputs name" >&2
+        [ "$(inputs_annotation "${WORK}/index")" = "${INPUTS[${name}]}" ] || {
+            echo "error: ${ref} was published for other inputs than this commit's; it is not the image these inputs name" >&2
             exit 1
         }
         printf 'image\tmica-build-env\t%s\tindex\t%s@%s\n' "${name}" "${ref}" "${digest}" >>"${OUT}"
         for arch in "${ARCHES[@]}"; do
             pd="$(jq -r --arg a "${arch}" '[.manifests[]? | select(.platform.os == "linux" and .platform.architecture == $a) | .digest] | first // empty' "${WORK}/index")"
             [ -n "${pd}" ] || { echo "error: ${ref}@${digest} lists no linux/${arch} manifest" >&2; exit 1; }
-            DOCKER_CONFIG="${WORK}/anon" docker buildx imagetools inspect --raw "${REPOSITORY}@${pd}" >"${WORK}/platform" 2>/dev/null &&
-                [ "sha256:$(sha256sum "${WORK}/platform" | cut -d' ' -f1)" = "${pd}" ] || {
+            [ "$(raw "${REPOSITORY}@${pd}" "${WORK}/platform" || true)" = "${pd}" ] || {
                 echo "error: the linux/${arch} manifest ${pd} of ${ref} does not read anonymously at its digest" >&2
                 exit 1
             }

@@ -34,17 +34,15 @@ g commit -q -m fixture
 # ------------------------------------------------------------ stubs
 # docker is a registry in ${STUB_REG}: blobs/<digest> holds manifest bytes and
 # tags/<ref with / written %> the digest a tag names; `imagetools inspect [--raw]`
-# answers from it. A build-env `<image>.inputs-*` tag that is published (any with
-# STUB_ALL=1, else those listed in STUB_PUBLISHED) is an index generated from its
-# tag, so a changed tag changes its children's inputs as a real one does.
-# `imagetools create -t <tag> <src@digest>` points the tag at the source digest.
+# answers from it. `imagetools create -t <tag> <source>` points the tag at the
+# source; with --annotation or several sources it stores a new index of their
+# manifests carrying the annotations. curl serves the registry's token and
+# tags/list from the same tags, as ghcr.io answers them.
 STUBS="${WORK}/stubs"
 LOG="${WORK}/calls"
 UP="${WORK}/uploaded"
-PUBLISHED="${WORK}/published"
 REG="${WORK}/registry"
 mkdir -p "${STUBS}" "${UP}" "${REG}/blobs" "${REG}/tags"
-: >"${PUBLISHED}"
 cat >"${STUBS}/mkindex" <<'STUB'
 #!/usr/bin/env bash
 # mkindex <label> <platforms>: store an index of one manifest per platform; print its digest.
@@ -68,16 +66,8 @@ echo "docker $*" >>"${STUB_LOG}"
 [ -z "${STUB_DOCKER_FAIL-}" ] || exit 1
 [ "$1 $2" = "buildx imagetools" ] || { echo "stub docker: unexpected $*" >&2; exit 2; }
 resolve() { # resolve <ref>: the digest it names, or fail
-    local ref="$1" tag
-    case "${ref}" in *@sha256:*) [ -f "${STUB_REG}/blobs/${ref##*@}" ] && echo "${ref##*@}"; return ;; esac
-    [ ! -f "${STUB_REG}/tags/${ref//\//%}" ] || { cat "${STUB_REG}/tags/${ref//\//%}"; return; }
-    tag="${ref##*:}"
-    case "${tag}" in
-    *.inputs-*)
-        [ -n "${STUB_ALL-}" ] || grep -cx "${tag}" "${STUB_PUBLISHED}" >/dev/null || return 1
-        mkindex "${tag}" "${STUB_PLATFORMS:-amd64,arm64}" ;;
-    *) return 1 ;;
-    esac
+    case "$1" in *@sha256:*) [ -f "${STUB_REG}/blobs/${1##*@}" ] && echo "${1##*@}"; return ;; esac
+    [ -f "${STUB_REG}/tags/${1//\//%}" ] && cat "${STUB_REG}/tags/${1//\//%}"
 }
 case "$3" in
 inspect)
@@ -89,9 +79,26 @@ inspect)
         printf 'Name: %s\nMediaType: application/vnd.oci.image.index.v1+json\nDigest: %s\n' "$4" "${d}"
     fi ;;
 create)
-    [ "$4" = -t ] && [ "$#" = 6 ] || { echo "stub docker: create takes -t <tag> <source> here" >&2; exit 2; }
-    d="$(resolve "$6")" || { echo "stub docker: no source $6" >&2; exit 1; }
-    printf '%s\n' "${d}" >"${STUB_REG}/tags/${5//\//%}" ;;
+    shift 3
+    annotations='{}' tag="" sources=()
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        --annotation) kv="${2#index:}"; annotations="$(jq -c --arg k "${kv%%=*}" --arg v "${kv#*=}" '. + {($k): $v}' <<<"${annotations}")"; shift 2 ;;
+        -t) tag="$2"; shift 2 ;;
+        *) sources+=("$1"); shift ;;
+        esac
+    done
+    digests=()
+    for src in "${sources[@]}"; do digests+=("$(resolve "${src}")") || { echo "stub docker: no source ${src}" >&2; exit 1; }; done
+    if [ "${#sources[@]}" = 1 ] && [ "${annotations}" = '{}' ]; then
+        d="${digests[0]}"
+    else
+        i="$(for d in "${digests[@]}"; do cat "${STUB_REG}/blobs/${d}"; echo; done |
+            jq -sc --argjson a "${annotations}" '{schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [.[].manifests[]], annotations: $a}')"
+        d="sha256:$(printf '%s' "${i}" | sha256sum | cut -d' ' -f1)"
+        printf '%s' "${i}" >"${STUB_REG}/blobs/${d}"
+    fi
+    printf '%s\n' "${d}" >"${STUB_REG}/tags/${tag//\//%}" ;;
 *) echo "stub docker: unexpected $*" >&2; exit 2 ;;
 esac
 STUB
@@ -126,11 +133,20 @@ esac
 STUB
 cat >"${STUBS}/curl" <<'STUB'
 #!/usr/bin/env bash
-# Serves a previous release's lock (STUB_PREV_TAG, STUB_PREV_LOCK) and what
-# `gh release upload` stored in STUB_UP; every other download fails.
+# Serves the registry token and tags/list of the stub registry, a previous
+# release's lock (STUB_PREV_TAG, STUB_PREV_LOCK) and what `gh release upload`
+# stored in STUB_UP; every other download fails.
 echo "curl $*" >>"${STUB_LOG}"
-out=""; url=""
-while [ "$#" -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac; done
+out=""; url=""; headers=""
+while [ "$#" -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -D) headers="$2"; shift 2 ;; -H) shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac; done
+[ -z "${STUB_DOCKER_FAIL-}" ] || case "${url}" in https://ghcr.io/*) exit 22 ;; esac
+case "${url}" in
+https://ghcr.io/token\?*) echo '{"token":"stub"}'; exit 0 ;;
+https://ghcr.io/v2/micaoss/mica-build-env/tags/list*)
+    [ -z "${headers}" ] || printf 'HTTP/2 200\r\n' >"${headers}"
+    (cd "${STUB_REG}/tags" && ls) | sed -n 's/^ghcr.io%micaoss%mica-build-env://p' | jq -Rsc '{name: "micaoss/mica-build-env", tags: split("\n") | map(select(. != ""))}' >"${out:-/dev/stdout}"
+    exit 0 ;;
+esac
 file="${url##*/}"; rest="${url%/*}"; tag="${rest##*/}"
 if [ -n "${STUB_PREV_TAG-}" ] && [ "${tag}" = "${STUB_PREV_TAG}" ] && [ "${file}" = mica-build-env.lock ] && [ -n "${STUB_PREV_LOCK-}" ]; then
     cp "${STUB_PREV_LOCK}" "${out}"; exit 0
@@ -141,7 +157,7 @@ fi
 exit 22
 STUB
 chmod +x "${STUBS}"/*
-export PATH="${STUBS}:${PATH}" STUB_LOG="${LOG}" STUB_UP="${UP}" STUB_PUBLISHED="${PUBLISHED}" STUB_REG="${REG}"
+export PATH="${STUBS}:${PATH}" STUB_LOG="${LOG}" STUB_UP="${UP}" STUB_REG="${REG}"
 
 # ------------------------------------------------------------ check-lock.sh over the specification's vectors
 # tests/vectors/ is mica:docs/design/release-lock/vectors/ (the lock and upstream
@@ -183,25 +199,21 @@ check_refusal "one source at two versions is refused" "pins go at 1.26.7 and 1.0
 sed -i "s/^source${TAB}go${TAB}amd64${TAB}[^${TAB}]*${TAB}/&x/" "${BE}/locks/upstream.lock"
 check_refusal "a lock that breaks the file rules is refused by its rule" "locks/upstream.lock is refused field-value"
 
-export STUB_ALL=1
-# ------------------------------------------------------------ publish-images.sh --plan and --build refusals
-plan() { # plan OUT: exit status of --plan, output in ${WORK}/plan.out
-    : >"${LOG}"
-    (cd "${BE}" && bash publish-images.sh --plan "$1") >"${WORK}/plan.out" 2>&1
-}
+# ------------------------------------------------------------ publish-images.sh
+# Every tag is a release: <image>.<release>, per architecture <image>.<arch>.<release>.
+tagfile() { printf '%s/tags/ghcr.io%%micaoss%%mica-build-env:%s' "${REG}" "$1"; }
+annotation() { jq -r '.annotations["com.mica.build-env.inputs"] // empty' "${REG}/blobs/$(cat "$(tagfile "$1")")"; }
+plan() { : >"${LOG}"; (cd "${BE}" && bash publish-images.sh --plan "$1") >"${WORK}/plan.out" 2>&1; }
+merge() { : >"${LOG}"; (cd "${BE}" && bash publish-images.sh --merge "$1" "$2") >"${WORK}/merge.out" 2>&1; }
+resolve() { : >"${LOG}"; rm -f "$2"; (cd "${BE}" && bash publish-images.sh --resolve "$1" --out "$2") >"${WORK}/resolve.out" 2>&1; }
 actions() { awk '{print $1 ":" $3}' "$1" | tr '\n' ' ' | sed 's/ $//'; }
-plan "${WORK}/all.plan" && [ "$(actions "${WORK}/all.plan")" = "base:published c:published go:published rust:published" ] &&
-    pass "--plan with every image published builds nothing" || fail "--plan all published: $(cat "${WORK}/all.plan" "${WORK}/plan.out")"
-awk '{print $2}' "${WORK}/all.plan" >"${WORK}/tags"
-tag_of() { awk -v n="$1" '$1 == n {print $2}' "${WORK}/all.plan"; }
-STUB_ALL="" STUB_PUBLISHED="${WORK}/none" plan "${WORK}/none.plan" && [ "$(actions "${WORK}/none.plan")" = "base:build c:build go:build rust:build" ] &&
-    pass "--plan with nothing published builds every image" || fail "--plan none: $(cat "${WORK}/none.plan")"
-grep -vx "$(tag_of base)" "${WORK}/tags" >"${WORK}/no-base"
-STUB_ALL="" STUB_PUBLISHED="${WORK}/no-base" plan "${WORK}/nobase.plan" && [ "$(actions "${WORK}/nobase.plan")" = "base:build c:build go:build rust:build" ] &&
-    pass "--plan rebuilds every child of a base that is not published, even when their tags are" || fail "--plan no base: $(cat "${WORK}/nobase.plan")"
-grep -vx "$(tag_of go)" "${WORK}/tags" >"${WORK}/no-go"
-STUB_ALL="" STUB_PUBLISHED="${WORK}/no-go" plan "${WORK}/nogo.plan" && [ "$(actions "${WORK}/nogo.plan")" = "base:published c:published go:build rust:published" ] &&
-    pass "--plan builds only an image whose tag is missing when its parent is published" || fail "--plan no go: $(cat "${WORK}/nogo.plan")"
+inputs_of() { awk -v n="$1" '$1 == n {print $2}' "${WORK}/none.plan"; }
+R0=20260101-0900
+T1=20260102-0304
+
+plan "${WORK}/none.plan" && [ "$(actions "${WORK}/none.plan")" = "base:build c:build go:build rust:build" ] &&
+    [ "$(grep -cE '^(base|c|go|rust) [0-9a-f]{64} build$' "${WORK}/none.plan")" = 4 ] &&
+    pass "--plan with nothing published builds every image, each named by the sha256 of its inputs" || fail "--plan none: $(cat "${WORK}/none.plan" "${WORK}/plan.out")"
 
 build_refusal() { # build_refusal LABEL PATTERN ARGS...: --build/--merge refuse before any build or push
     local label="$1" pattern="$2"; shift 2
@@ -217,40 +229,46 @@ build_refusal() { # build_refusal LABEL PATTERN ARGS...: --build/--merge refuse 
     fi
 }
 case "$(uname -m)" in x86_64) other=arm64 ;; *) other=amd64 ;; esac
-build_refusal "--build for another architecture is refused: no emulation" "images are built natively, not emulated" --build "${other}" "${WORK}/none.plan"
-sed 's/^\(go [^ ]*\)[0-9a-f] /\1x /' "${WORK}/none.plan" >"${WORK}/stale.plan"
-build_refusal "--merge with a plan of other inputs is refused" "these inputs are" --merge "${WORK}/stale.plan" 20260102-0304
-build_refusal "--merge with an empty plan is refused" "missing or empty" --merge "${WORK}/empty.plan" 20260102-0304
-build_refusal "--merge with a release that is not YYYYMMDD-HHMM is refused" "is not YYYYMMDD-HHMM" --merge "${WORK}/all.plan" v0.0.1
+build_refusal "--build for another architecture is refused: no emulation" "images are built natively, not emulated" --build "${other}" "${R0}" "${WORK}/none.plan"
+sed 's/^\(go [0-9a-f]*\)[0-9a-f] /\1x /' "${WORK}/none.plan" >"${WORK}/stale.plan"
+build_refusal "--merge with a plan of other inputs is refused" "but these inputs are" --merge "${R0}" "${WORK}/stale.plan"
+build_refusal "--merge with an empty plan is refused" "missing or empty" --merge "${R0}" "${WORK}/empty.plan"
+build_refusal "--merge with a release that is not YYYYMMDD-HHMM is refused" "is not YYYYMMDD-HHMM" --merge v0.0.1 "${WORK}/none.plan"
+build_refusal "--merge of an image whose architectures were not pushed is refused" "base.amd64.${R0} is not pushed" --merge "${R0}" "${WORK}/none.plan"
 
-# ------------------------------------------------------------ publish-images.sh --merge tags the release, --resolve names it
-R=20260102-0304
-resolve() { # resolve RELEASE OUT: exit status of --resolve, its output in ${WORK}/resolve.out
-    : >"${LOG}"
-    rm -f "$2"
-    (cd "${BE}" && bash publish-images.sh --resolve "$1" --out "$2") >"${WORK}/resolve.out" 2>&1
-}
-merge() { # merge PLAN RELEASE: exit status of --merge, its output in ${WORK}/merge.out
-    : >"${LOG}"
-    (cd "${BE}" && bash publish-images.sh --merge "$1" "$2") >"${WORK}/merge.out" 2>&1
-}
-if resolve "${R}" "${WORK}/none.rows"; then
-    fail "--resolve succeeds before the release tags exist"
-elif says "${WORK}/resolve.out" "mica-build-env:base.${R} (base) is not published"; then
-    pass "--resolve refuses an image not tagged for the release, naming <image>.<release>"
+# The build jobs of ${R0} pushed <image>.<arch>.${R0}.
+for n in base c go rust; do for a in amd64 arm64; do mkindex "${n}-${a}" "${a}" >"$(tagfile "${n}.${a}.${R0}")"; done; done
+if merge "${R0}" "${WORK}/none.plan" && [ "$(grep -c "imagetools create --annotation index:com.mica.build-env.inputs=[0-9a-f]* -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.amd64\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.arm64\.${R0}" "${LOG}")" = 4 ]; then
+    pass "--merge publishes each built image as <image>.<release>, both architectures in one index"
 else
-    fail "--resolve before tagging: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
+    fail "--merge ${R0}: $(tail -n3 "${WORK}/merge.out" | tr '\n' ' ')"
+fi
+ok=1
+for n in base c go rust; do [ "$(annotation "${n}.${R0}")" = "$(inputs_of "${n}")" ] || ok=0; done
+[ "${ok}" = 1 ] && pass "... each index carries its inputs as com.mica.build-env.inputs" || fail "... annotations: $(annotation "base.${R0}")"
+merge "${R0}" "${WORK}/none.plan" && ! says "${LOG}" "imagetools create" && pass "... a rerun re-points nothing" || fail "... rerun: $(cat "${LOG}")"
+
+plan "${WORK}/all.plan" && [ "$(actions "${WORK}/all.plan")" = "base:published c:published go:published rust:published" ] &&
+    [ "$(grep -c " published ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0}@sha256:" "${WORK}/all.plan")" = 4 ] &&
+    pass "--plan finds every image published with these inputs under its release tag" || fail "--plan all published: $(cat "${WORK}/all.plan" "${WORK}/plan.out")"
+if merge "${T1}" "${WORK}/all.plan" && [ "$(grep -c "imagetools create -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${T1} ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0}@sha256:" "${LOG}")" = 4 ]; then
+    pass "--merge of a release with no image built tags each published image <image>.<release>"
+else
+    fail "--merge ${T1}: $(tail -n3 "${WORK}/merge.out" | tr '\n' ' ')"
+fi
+[ "$(cat "$(tagfile "rust.${T1}")")" = "$(cat "$(tagfile "rust.${R0}")")" ] && pass "... an unchanged image keeps its digest" || fail "... rust.${T1} moved"
+
+if resolve 20260103-0000 "${WORK}/none.rows"; then
+    fail "--resolve succeeds for a release that tagged nothing"
+elif says "${WORK}/resolve.out" "mica-build-env:base.20260103-0000 (base) is not published"; then
+    pass "--resolve refuses a release whose images are not tagged, naming <image>.<release>"
+else
+    fail "--resolve untagged: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
 fi
 if says "${LOG}" "imagetools create" || says "${LOG}" "buildx build"; then fail "--resolve builds or pushes: $(cat "${LOG}")"; else pass "--resolve builds and pushes nothing"; fi
-if merge "${WORK}/all.plan" "${R}" && [ "$(grep -c "imagetools create -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${R} ghcr.io/micaoss/mica-build-env:[a-z]*\.inputs-[0-9a-f]*@sha256:" "${LOG}")" = 4 ]; then
-    pass "--merge tags every image <image>.<release> at its inputs digest, built or not"
-else
-    fail "--merge: $(tail -n3 "${WORK}/merge.out" | tr '\n' ' ') $(grep -c 'imagetools create' "${LOG}")"
-fi
-merge "${WORK}/all.plan" "${R}" && ! says "${LOG}" "imagetools create" && pass "... a rerun re-tags nothing" || fail "... rerun: $(cat "${LOG}")"
-if resolve "${R}" "${WORK}/good.rows"; then pass "--resolve writes the image rows once every image is tagged"; else fail "--resolve: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"; fi
+if resolve "${T1}" "${WORK}/good.rows"; then pass "--resolve writes the image rows of a tagged release"; else fail "--resolve: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"; fi
 shape="$(while IFS="${TAB}" read -r kind source name platform ref; do
-    if [ "${kind}" = image ] && [ "${source}" = mica-build-env ] && { { [ "${platform}" = index ] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env:${name}\.${R}@sha256:[0-9a-f]{64}$ ]]; } ||
+    if [ "${kind}" = image ] && [ "${source}" = mica-build-env ] && { { [ "${platform}" = index ] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env:${name}\.${T1}@sha256:[0-9a-f]{64}$ ]]; } ||
         { [[ "${platform}" =~ ^(amd64|arm64)$ ]] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env@sha256:[0-9a-f]{64}$ ]]; }; }; then
         printf '%s:%s ' "${name}" "${platform}"
     else
@@ -258,34 +276,49 @@ shape="$(while IFS="${TAB}" read -r kind source name platform ref; do
     fi
 done <"${WORK}/good.rows")"
 if [ "${shape}" = "base:index base:amd64 base:arm64 c:index c:amd64 c:arm64 go:index go:amd64 go:arm64 rust:index rust:amd64 rust:arm64 " ]; then
-    pass "the image rows name mica-build-env, each image's index as <image>.<release> and its amd64 and arm64 manifests by digest"
+    pass "the image rows name mica-build-env, each index as <image>.<release> and its amd64 and arm64 manifests by digest"
 else
     fail "the image rows: ${shape}"
 fi
-GO_TAG="${REG}/tags/ghcr.io%micaoss%mica-build-env:go.${R}"
-cp "${GO_TAG}" "${WORK}/go.tag"
-mkindex other amd64,arm64 >"${GO_TAG}"
-if merge "${WORK}/all.plan" "${R}"; then
-    fail "--merge accepts a release tag that holds another digest"
-elif says "${WORK}/merge.out" "go.${R} already holds .* never re-pointed" && ! says "${LOG}" "imagetools create"; then
-    pass "--merge refuses a release tag that holds another digest, without re-pointing it"
+
+aside() { mkdir -p "${WORK}/aside"; for t in "$@"; do mv "$(tagfile "${t}")" "${WORK}/aside/"; done; }
+back() { mv "${WORK}/aside/"* "${REG}/tags/"; }
+aside "base.${R0}" "base.${T1}"
+plan "${WORK}/nobase.plan" && [ "$(actions "${WORK}/nobase.plan")" = "base:build c:build go:build rust:build" ] &&
+    pass "--plan rebuilds every child of a base that is not published, even when theirs are" || fail "--plan no base: $(cat "${WORK}/nobase.plan")"
+back
+aside "go.${R0}" "go.${T1}"
+plan "${WORK}/nogo.plan" && [ "$(actions "${WORK}/nogo.plan")" = "base:published c:published go:build rust:published" ] &&
+    pass "--plan builds only an image not published with these inputs when its parent is" || fail "--plan no go: $(cat "${WORK}/nogo.plan")"
+back
+
+cp "$(tagfile "go.${T1}")" "${WORK}/go.tag"
+mkindex other amd64,arm64 >"$(tagfile "go.${T1}")"
+if merge "${T1}" "${WORK}/all.plan"; then
+    fail "--merge accepts a release tag that holds other inputs"
+elif says "${WORK}/merge.out" "go.${T1} already holds .* never re-pointed" && ! says "${LOG}" "imagetools create"; then
+    pass "--merge refuses a release tag that holds other inputs, without re-pointing it"
 else
-    fail "--merge over another digest: $(tail -n2 "${WORK}/merge.out" | tr '\n' ' ')"
+    fail "--merge over other inputs: $(tail -n2 "${WORK}/merge.out" | tr '\n' ' ')"
 fi
-if ! resolve "${R}" "${WORK}/x.rows" && says "${WORK}/resolve.out" "go.${R} is sha256:.*, which is not .*go.inputs-"; then
-    pass "--resolve refuses a release tag that is not the image these inputs name"
+if ! resolve "${T1}" "${WORK}/x.rows" && says "${WORK}/resolve.out" "go.${T1} was published for other inputs"; then
+    pass "--resolve refuses a release tag published for other inputs"
 else
     fail "--resolve with another go: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
 fi
-cp "${WORK}/go.tag" "${GO_TAG}"
-if STUB_PLATFORMS=amd64 merge "${WORK}/all.plan" 20260102-0305 && ! STUB_PLATFORMS=amd64 resolve 20260102-0305 "${WORK}/amd64.rows" &&
-    says "${WORK}/resolve.out" "lists no linux/arm64 manifest"; then
+cp "${WORK}/go.tag" "$(tagfile "go.${T1}")"
+
+jq -c '.manifests |= map(select(.platform.architecture == "amd64"))' "${REG}/blobs/$(cat "$(tagfile "base.${T1}")")" >"${WORK}/amd64.index"
+d="sha256:$(tr -d '\n' <"${WORK}/amd64.index" | sha256sum | cut -d' ' -f1)"
+tr -d '\n' <"${WORK}/amd64.index" >"${REG}/blobs/${d}" && printf '%s\n' "${d}" >"$(tagfile base.20260104-0000)"
+if ! resolve 20260104-0000 "${WORK}/amd64.rows" && says "${WORK}/resolve.out" "lists no linux/arm64 manifest"; then
     pass "--resolve refuses an index that lists no arm64 manifest"
 else
-    fail "--resolve amd64 only: $(tail -n2 "${WORK}/resolve.out" "${WORK}/merge.out" | tr '\n' ' ')"
+    fail "--resolve amd64 only: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
 fi
+rm -f "$(tagfile base.20260104-0000)"
 
-moved() { # moved LABEL EXPECTED: plan after a change, compare the images whose inputs tags moved, restore the tree
+moved() { # moved LABEL EXPECTED: plan after a change, compare the images whose inputs moved, restore the tree
     local got
     plan "${WORK}/moved.plan" || true
     got="$(awk 'NR == FNR { t[$1] = $2; next } t[$1] != $2 { print $1 }' "${WORK}/all.plan" "${WORK}/moved.plan" | sort | tr '\n' ' ' | sed 's/ $//')"
@@ -386,7 +419,6 @@ none_called() { if [ -s "${LOG}" ]; then fail "$1: $(tr '\n' ' ' <"${LOG}")"; el
 nothing_written() { if says "${LOG}" "release upload" || says "${LOG}" "release edit"; then fail "$1: $(grep 'release \(upload\|edit\)' "${LOG}")"; else pass "$1"; fi; }
 
 T0=20260101-0000
-T1=20260102-0304
 printf '\n' >>"${BE}/README.md"
 g commit -q -am tagged
 g update-ref refs/remotes/origin/main HEAD
@@ -419,8 +451,10 @@ g checkout -q -- .
 STUB_RELEASES="${T1} 20261231-2359 v0.0.1" release "a release later than the tag is refused" 1 "the release 20261231-2359 is later than ${T1}" "${T1}"
 no_call "... before any image is read" "docker"
 
-STUB_ALL="" release "a tag whose images are not published is refused" 1 "the images job publishes them for ${T1}" "${T1}"
+mv "${REG}/tags" "${REG}/tags.kept" && mkdir "${REG}/tags"
+release "a tag whose images are not published is refused" 1 "the images job publishes them for ${T1}" "${T1}"
 nothing_written "... and nothing is written"
+rm -rf "${REG}/tags" && mv "${REG}/tags.kept" "${REG}/tags"
 STUB_DOCKER_FAIL=1 release "images that do not read anonymously are refused" 1 "not all published" "${T1}"
 nothing_written "... and nothing is written"
 sed -i "/^image${TAB}upstream${TAB}/s/@sha256:.*//" "${BE}/locks/upstream.lock"
@@ -455,7 +489,8 @@ want_lock="$(printf '# mica-lock v1\nrelease\tmica-build-env\t%s\t%s\n' "${T1}" 
 grep -c "^image${TAB}upstream${TAB}debian:trixie-slim${TAB}386${TAB}docker.io/library/debian:trixie-slim@sha256:" "${UP}/mica-build-env.lock" >/dev/null && pass "... debian:trixie-slim carries its 386 row" || fail "... no 386 row"
 cp "${UP}/mica-build-env.lock" "${WORK}/first.lock"
 
-STUB_RELEASES="${T0} ${T1}" STUB_LOCK_TAGS="${T0}" STUB_PREV_TAG="${T0}" STUB_PREV_LOCK="${WORK}/first.lock" release "a release after one with the same images" 0 "Images: unchanged from ${T0}." "${T1}"
+sed "s/\.${T1}@sha256:/.${R0}@sha256:/" "${WORK}/first.lock" >"${WORK}/same.lock"
+STUB_RELEASES="${T0} ${T1}" STUB_LOCK_TAGS="${T0}" STUB_PREV_TAG="${T0}" STUB_PREV_LOCK="${WORK}/same.lock" release "a release after one with the same images under its own release tags" 0 "Images: unchanged from ${T0}." "${T1}"
 sed "s/@sha256:[0-9a-f]*\$/@sha256:$(printf other | sha256sum | cut -d' ' -f1)/" "${WORK}/first.lock" >"${WORK}/other.lock"
 STUB_RELEASES="${T0} ${T1}" STUB_LOCK_TAGS="${T0}" STUB_PREV_TAG="${T0}" STUB_PREV_LOCK="${WORK}/other.lock" release "a release after one with other images" 0 "Images: changed from ${T0}. This is a breaking update" "${T1}"
 says "${LOG}" "This is a breaking update: every repository must update to it." && pass "... and its notes say so" || fail "... notes: $(grep 'release edit' "${LOG}")"

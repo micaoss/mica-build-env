@@ -2,9 +2,9 @@ name: release
 # Runs only when a release is published (`gh release create <YYYYMMDD-HHMM>
 # --target <commit>`), building from the release's tag. The plan job lists the
 # build-env images these inputs do not have yet; one job per architecture builds
-# them natively on its own runner and pushes <image>.<arch>.build-<commit12>; the
-# merge job joins both into the multi-arch <image>.inputs-<16> and tags every image
-# <image>.<release>; the assets job
+# them natively on its own runner and pushes <image>.<arch>.<release>; the merge
+# job publishes every image as <image>.<release> (built now, or an unchanged
+# image under its earlier digest); the assets job
 # attaches mica-build-env.lock (mica-lock v1) and SHA256SUMS to the release.
 on:
   release:
@@ -76,7 +76,7 @@ jobs:
           printf '%s' "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           # The plan goes outside the checkout: publish-images.sh refuses a dirty tree.
           printf '%s\n' "${PLAN}" >"$RUNNER_TEMP/plan"
-          bash publish-images.sh --build "${ARCH}" "$RUNNER_TEMP/plan"
+          bash publish-images.sh --build "${ARCH}" "${TAG}" "$RUNNER_TEMP/plan"
   merge:
     needs: [plan, build]
     if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
@@ -95,7 +95,7 @@ jobs:
           set -euo pipefail
           printf '%s' "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           printf '%s\n' "${PLAN}" >"$RUNNER_TEMP/plan"
-          bash publish-images.sh --merge "$RUNNER_TEMP/plan" "${TAG}"
+          bash publish-images.sh --merge "${TAG}" "$RUNNER_TEMP/plan"
           bash publish-images.sh --resolve "${TAG}" --out "$RUNNER_TEMP/images.rows"
           {
             echo "Image rows:"

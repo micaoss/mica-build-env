@@ -134,7 +134,9 @@ else
         echo "error: the ${LOCK} of the previous release ${previous} could not be read, so whether the images changed is unknown; nothing was attached" >&2
         exit 1
     }
-    if cmp -s <(grep '^image' "${WORK}/previous/${LOCK}") <(grep '^image' "${WORK}/assets/${LOCK}"); then
+    # Compared by digest: every release tags its images anew, so the tags always differ.
+    if cmp -s <(grep '^image' "${WORK}/previous/${LOCK}" | sed -E 's/:[A-Za-z0-9._-]+@sha256:/@sha256:/') \
+        <(grep '^image' "${WORK}/assets/${LOCK}" | sed -E 's/:[A-Za-z0-9._-]+@sha256:/@sha256:/'); then
         images_note="Images: unchanged from ${previous}."
     else
         images_note="Images: changed from ${previous}. This is a breaking update: every repository must update to it."
