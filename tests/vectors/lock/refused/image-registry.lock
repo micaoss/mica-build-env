@@ -2,7 +2,7 @@
 release	mica-build-env	20260914-2042	0123456789abcdef0123456789abcdef01234567
 image	mica-build-env	base	amd64	ghcr.io/micaoss/mica-build-env@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1
 image	mica-build-env	base	arm64	ghcr.io/micaoss/mica-build-env@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2
-image	mica-build-env	base	index	ghcr.io/micaoss/mica-build-env:base.20260914-2042@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0
+image	mica-build-env	base	index	docker.io/micaoss/mica-build-env:base.20260914-2042@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0
 image	mica-build-env	c	amd64	ghcr.io/micaoss/mica-build-env@sha256:ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1
 image	mica-build-env	c	arm64	ghcr.io/micaoss/mica-build-env@sha256:ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc2
 image	mica-build-env	c	index	ghcr.io/micaoss/mica-build-env:c.20260914-2042@sha256:ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0

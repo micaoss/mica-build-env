@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Turn the upstream mirrors of locks/upstream.lock and the LOCAL_ tags of
+# Turn the upstream images of locks/upstream.lock and the LOCAL_ tags of
 # params.env into the --build-arg lines that carry a `FROM` into a Dockerfile,
 # and refuse everything that must not reach one.
 #
-#   bash from.sh MICA_BASE_IMAGE=upstream.debian.trixie-slim
-#       -> --build-arg MICA_BASE_IMAGE=ghcr.io/micaoss/mica-build-env:upstream.debian.trixie-slim.d7e12182ce18@sha256:d7e12182...
-#   bash from.sh --ref upstream.debian.trixie-slim
-#       -> ghcr.io/micaoss/mica-build-env:upstream.debian.trixie-slim.d7e12182ce18@sha256:d7e12182...
+#   bash from.sh MICA_BASE_IMAGE=upstream:debian:trixie-slim
+#       -> --build-arg MICA_BASE_IMAGE=docker.io/library/debian:trixie-slim@sha256:d7e12182...
+#   bash from.sh --ref upstream:debian:trixie-slim
+#       -> docker.io/library/debian:trixie-slim@sha256:d7e12182...
 #   bash from.sh --check
 #       -> validate locks/upstream.lock and params.env, print nothing, exit 0 or 1
 #   bash from.sh --arch=arm64 --contexts=/some/dir LOCAL_MICA_BUILD_C
 #       -> --build-context localhost/mica-build-c:arm64=oci-layout:///some/dir/mica-build-c-arm64
 #
-# upstream.<name> resolves to the mirror of the image rows <name>, pinned by the
-# upstream index digest; LOCAL_ keys resolve to `<name>:<arch>` and must exist in
+# upstream:<name> resolves to the reference of the upstream image rows <name>,
+# pinned by its index digest; LOCAL_ keys resolve to `<name>:<arch>` and must exist in
 # the local image store. It builds and pulls nothing; --contexts only exports
 # local images as OCI layouts.
 set -euo pipefail
@@ -56,11 +56,11 @@ check_local_key() {
 resolve_key() {
     local key="$1" val
     case "${key}" in
-    upstream.*) mirror_ref "${key#upstream.}" || return 1; return 0 ;;
+    upstream:*) upstream_ref "${key#upstream:}" || return 1; return 0 ;;
     esac
     val="${!key-}"
     if [ -z "${val}" ]; then
-        echo "error: params.env defines no ${key}. Every base image in this tree is an upstream.<name> mirror of locks/upstream.lock or a LOCAL_ tag; if this is a new one, pin it there rather than writing it into a FROM or a docker run" >&2
+        echo "error: params.env defines no ${key}. Every base image in this tree is an upstream:<name> image of locks/upstream.lock or a LOCAL_ tag; if this is a new one, pin it there rather than writing it into a FROM or a docker run" >&2
         return 1
     fi
     case "${key}" in
@@ -74,22 +74,22 @@ resolve_key() {
         check_local_key "${key}" "${val}" || return 1
         ;;
     *)
-        echo "error: ${key} is neither an upstream.<name> mirror nor a LOCAL_ key, so from.sh cannot say what would make it valid. A base image is either an upstream image pinned in locks/upstream.lock (upstream.<name>) or one this repository builds (LOCAL_)" >&2
+        echo "error: ${key} is neither an upstream:<name> image nor a LOCAL_ key, so from.sh cannot say what would make it valid. A base image is either an upstream image pinned in locks/upstream.lock (upstream:<name>) or one this repository builds (LOCAL_)" >&2
         return 1
         ;;
     esac
     printf '%s\n' "${val}"
 }
 
-# --check: pins_load above validated both files; every image row must name a mirror.
+# --check: pins_load above validated both files; every upstream image resolves.
 if [ "${1-}" = "--check" ]; then
     [ "$#" -eq 1 ] || { echo "error: --check takes no other arguments" >&2; exit 1; }
-    mapfile -t names < <(awk -F'\t' '$1 == "image" { print $2 }' "${UPSTREAM_LOCK}" | sort -u)
+    mapfile -t names < <(awk -F'\t' '$1 == "image" { print $3 }' "${UPSTREAM_LOCK}" | sort -u)
     [ "${#names[@]}" -gt 0 ] || {
         echo "error: locks/upstream.lock pins no image at all, so this check passed by having nothing to check" >&2
         exit 1
     }
-    for n in "${names[@]}"; do mirror_ref "${n}" >/dev/null; done
+    for n in "${names[@]}"; do upstream_ref "${n}" >/dev/null; done
     exit 0
 fi
 
@@ -106,7 +106,7 @@ fi
 if [ "${1-}" = "--ref" ]; then
     shift
     [ "$#" -eq 1 ] || {
-        echo "error: --ref takes exactly one upstream.<name> or LOCAL_ key. It prints one reference on stdout; a call with none would print an empty string that a caller would substitute into a docker command line as no image at all, and a call with several would have to be read back by position" >&2
+        echo "error: --ref takes exactly one upstream:<name> or LOCAL_ key. It prints one reference on stdout; a call with none would print an empty string that a caller would substitute into a docker command line as no image at all, and a call with several would have to be read back by position" >&2
         exit 1
     }
     resolve_key "$1"
@@ -138,7 +138,7 @@ if [ "${1-}" != "${1#--contexts=}" ]; then
         case "${key}" in
         LOCAL_*) ;;
         *)
-            echo "error: ${key} is not a LOCAL_ key. Only an image this repository builds is exported as a layout; an upstream.<name> mirror is a digest-pinned reference that every driver resolves for itself" >&2
+            echo "error: ${key} is not a LOCAL_ key. Only an image this repository builds is exported as a layout; an upstream:<name> image is a digest-pinned reference that every driver resolves for itself" >&2
             bad=1
             continue
             ;;
@@ -171,8 +171,8 @@ fi
 
 [ "$#" -gt 0 ] || {
     cat >&2 <<'USAGE'
-usage: from.sh [--arch=<amd64|arm64>] <ARG_NAME>=<upstream.NAME|LOCAL_KEY> [...]
-       from.sh [--arch=<amd64|arm64>] --ref <upstream.NAME|LOCAL_KEY>
+usage: from.sh [--arch=<amd64|arm64>] <ARG_NAME>=<upstream:NAME|LOCAL_KEY> [...]
+       from.sh [--arch=<amd64|arm64>] --ref <upstream:NAME|LOCAL_KEY>
        from.sh [--arch=<amd64|arm64>] --contexts=<DIR> <LOCAL_KEY> [...]
        from.sh --check
 
@@ -189,7 +189,7 @@ for pair in "$@"; do
     arg="${pair%%=*}"
     key="${pair#*=}"
     if [ "${arg}" = "${pair}" ] || [ -z "${arg}" ] || [ -z "${key}" ]; then
-        echo "error: '${pair}' is not <ARG_NAME>=<upstream.NAME|LOCAL_KEY>" >&2
+        echo "error: '${pair}' is not <ARG_NAME>=<upstream:NAME|LOCAL_KEY>" >&2
         bad=1
         continue
     fi

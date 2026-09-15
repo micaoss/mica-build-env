@@ -6,8 +6,8 @@
 #   bash check-lock.sh lock <file>        a release lock (sections 1.1 to 1.5)
 #   bash check-lock.sh upstream <file>    locks/upstream.lock (section 4.1)
 #
-# publish-release.sh runs it over the lock it writes, pins.sh and
-# publish-mirrors.sh over locks/upstream.lock, tests/publish-test.sh over the
+# publish-release.sh runs it over the lock it writes and locks/upstream.lock,
+# pins.sh over locks/upstream.lock, tests/publish-test.sh over the
 # specification's vectors. Registry checks are not file rules.
 set -euo pipefail
 export LC_ALL=C
@@ -20,7 +20,7 @@ FILE="$2"
 refuse() { echo "refused $1"; exit 1; }
 
 KINDS=(release image pool package board upstream apt)
-declare -A COLUMNS=([release]=4 [image]=4 [pool]=3 [package]=5 [board]=4 [upstream]=7 [apt]=5)
+declare -A COLUMNS=([release]=4 [image]=5 [pool]=3 [package]=5 [board]=4 [upstream]=7 [apt]=5)
 kind_index() { local i; for i in "${!KINDS[@]}"; do [ "${KINDS[$i]}" != "$1" ] || { echo "$i"; return; }; done; }
 
 # 1.1: UTF-8, LF with a final LF, no CR, header, no empty line, leading space or trailing tab.
@@ -49,13 +49,26 @@ split() {
 }
 
 NAME_RE='^[a-z0-9][a-z0-9.+-]*$'
+# An upstream image keeps its original name and reference, as debian:trixie-slim.
+UPSTREAM_NAME_RE='^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$'
+UPSTREAM_REFERENCE_RE='^[a-z0-9-]+(\.[a-z0-9-]+)+(:[0-9]+)?/[a-z0-9._/-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$'
+REPOSITORY_RE='^[a-z0-9][a-z0-9-]*$'
 VERSION_RE='^[A-Za-z0-9.+~:-]+$'
 SHA_RE='^[0-9a-f]{64}$'
 ARCH_RE='^(amd64|arm64)$'
 
+# upstream_image: the fields of an `image upstream` row in FIELDS; an upstream
+# image by digest, never republished on one of Mica's own registries.
+upstream_image() {
+    [[ "${FIELDS[2]}" =~ ${UPSTREAM_NAME_RE} ]] && [[ "${FIELDS[3]}" =~ ^(index|amd64|arm64|386)$ ]] || refuse field-value
+    [[ "${FIELDS[4]}" == *@sha256:* ]] || refuse reference-digest
+    case "${FIELDS[4]}" in ghcr.io/micaoss/* | local/*) refuse reference-upstream ;; esac
+    [[ "${FIELDS[4]}" =~ ${UPSTREAM_REFERENCE_RE} ]] || refuse field-value
+}
+
 # 4.1: no release row; image, source and git rows only.
 if [ "${MODE}" = upstream ]; then
-    declare -A UCOLUMNS=([image]=4 [source]=6 [git]=5)
+    declare -A UCOLUMNS=([image]=5 [source]=6 [git]=5)
     UKINDS=(image source git)
     for row in ${ROWS[@]+"${ROWS[@]}"}; do
         split "${row}"
@@ -70,10 +83,9 @@ if [ "${MODE}" = upstream ]; then
         kind="${FIELDS[0]}"
         case "${kind}" in
         image)
-            [[ "${FIELDS[1]}" =~ ${NAME_RE} ]] && [[ "${FIELDS[2]}" =~ ^(index|amd64|arm64|386)$ ]] || refuse field-value
-            [[ "${FIELDS[3]}" == *@sha256:* ]] || refuse reference-digest
-            [[ "${FIELDS[3]}" =~ ^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$ ]] || refuse field-value
-            key="${FIELDS[1]}"$'\x01'"${FIELDS[2]}"
+            [ "${FIELDS[1]}" = upstream ] || refuse image-source
+            upstream_image
+            key="${FIELDS[1]}"$'\x01'"${FIELDS[2]}"$'\x01'"${FIELDS[3]}"
             ;;
         source)
             [[ "${FIELDS[1]}" =~ ${NAME_RE} ]] && [[ "${FIELDS[2]}" =~ ^(amd64|arm64|all)$ ]] && [[ "${FIELDS[3]}" =~ ${VERSION_RE} ]] &&
@@ -113,13 +125,15 @@ REPOSITORY="${FIELDS[1]}" RELEASE="${FIELDS[2]}"
 REGISTRY=ghcr.io/micaoss
 [ "${RELEASE}" != offline ] || REGISTRY=local
 
+# reference <ref> [<repository>]: a reference to <repository> (default the release's) by digest.
 reference() {
+    [[ "$1" == *@sha256:* ]] || refuse reference-digest
     [[ "$1" =~ ^(ghcr\.io/micaoss|local)/([a-z0-9][a-z0-9-]*)(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$ ]] || {
-        [[ "$1" == *@sha256:* ]] && refuse field-value
-        refuse reference-digest
+        case "$1" in ghcr.io/micaoss/* | local/*) refuse field-value ;; esac
+        refuse reference-registry
     }
     [ "${BASH_REMATCH[1]}" = "${REGISTRY}" ] || refuse reference-registry
-    [ "${BASH_REMATCH[2]}" = "${REPOSITORY}" ] || refuse reference-repository
+    [ "${BASH_REMATCH[2]}" = "${2:-${REPOSITORY}}" ] || refuse reference-repository
 }
 
 declare -A KEYS=() POOLS=()
@@ -129,9 +143,17 @@ for row in "${ROWS[@]:1}"; do
     kind="${FIELDS[0]}"
     case "${kind}" in
     image)
-        [[ "${FIELDS[1]}" =~ ${NAME_RE} ]] && [[ "${FIELDS[2]}" =~ ^(index|amd64|arm64|386)$ ]] || refuse field-value
-        reference "${FIELDS[3]}"
-        key="${FIELDS[1]}"$'\x01'"${FIELDS[2]}"
+        if [ "${FIELDS[1]}" = upstream ]; then
+            upstream_image
+        elif [[ "${FIELDS[1]}" =~ ${REPOSITORY_RE} ]]; then
+            [[ "${FIELDS[2]}" =~ ${NAME_RE} ]] && [[ "${FIELDS[3]}" =~ ^(index|amd64|arm64|386)$ ]] || refuse field-value
+            reference "${FIELDS[4]}" "${FIELDS[1]}"
+            # A producer's own lock names only its own images besides upstream ones.
+            [ "${FIELDS[1]}" = "${REPOSITORY}" ] || refuse image-source
+        else
+            refuse image-source
+        fi
+        key="${FIELDS[1]}"$'\x01'"${FIELDS[2]}"$'\x01'"${FIELDS[3]}"
         ;;
     pool)
         [[ "${FIELDS[1]}" =~ ${ARCH_RE} ]] || refuse field-value

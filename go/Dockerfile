@@ -1,4 +1,4 @@
-# syntax=ghcr.io/micaoss/mica-build-env:upstream.docker-dockerfile.1.ecfaec9ed6d8@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# syntax=docker.io/docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 # check=skip=InvalidDefaultArgInFrom
 # mica-build-go -- the Go toolchain from a sha256-pinned upstream tarball, on
 # top of mica-build-c, whose C toolchain cgo uses. curl stays in the fetch stage.

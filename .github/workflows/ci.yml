@@ -15,7 +15,7 @@ jobs:
       - name: Image inputs and the release refusals
         run: bash tests/publish-test.sh
       - name: Workflows
-        run: docker run --rm -v "$PWD:/repo:ro" -w /repo ghcr.io/micaoss/mica-build-env:upstream.rhysd-actionlint.1.7.12.b1934ee5f1c5@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
   archives:
     # Only a push to main writes the cache: pull requests never do, and a release
     # (whose cache would be scoped to its tag) only restores it. The key is the

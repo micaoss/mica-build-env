@@ -10,8 +10,8 @@
 # Publishing is CI's: .github/workflows/release.yml runs --plan, then --build on
 # an amd64 and an arm64 runner, then --merge, when a release is published
 # (`docker login ghcr.io` with packages: write). base builds on
-# the debian.trixie-slim mirror, c on base, go and rust on c. An image's inputs are its
-# keys of locks/upstream.lock and params.env (pins.sh), its parent's inputs tag (or the mirror for base), its
+# debian:trixie-slim (locks/upstream.lock), c on base, go and rust on c. An image's inputs are its
+# keys of locks/upstream.lock and params.env (pins.sh), its parent's inputs tag (or the upstream reference for base), its
 # Dockerfile, dockerignore and the scripts that allow-list admits, and lib/; the
 # image is this repository's package tagged <image>.inputs-<sha256 prefix> of
 # them. An image is built when that tag is not published or its parent is built
@@ -25,9 +25,9 @@ REPOSITORY="${MICA_IMAGES_REPOSITORY:-ghcr.io/micaoss/mica-build-env}"
 . "${HERE}/pins.sh"
 ARCHES=(amd64 arm64)
 
-# <image>|<input key prefixes>|<parent: an upstream.<name> mirror or an earlier image>
+# <image>|<input key prefixes>|<parent: an upstream:<name> image or an earlier image>
 IMAGES=(
-    "base|BASE_,DEB_,OPENSSL_|upstream.debian.trixie-slim"
+    "base|BASE_,DEB_,OPENSSL_|upstream:debian:trixie-slim"
     "c|C_|base"
     "go|GO_|c"
     "rust|RUST_,RUSTCHECK_|c"
@@ -94,7 +94,7 @@ declare -A TAG=() PARENT=()
 for row in "${IMAGES[@]}"; do
     IFS='|' read -r name prefixes parent <<<"${row}"
     case "${parent}" in
-    upstream.*) from="$(mirror_ref "${parent#upstream.}")" || exit 1 ;;
+    upstream:*) from="$(upstream_ref "${parent#upstream:}")" || exit 1 ;;
     *) from="${TAG[${parent}]}" ;;
     esac
     [ -n "${from}" ] || { echo "error: ${name}'s parent ${parent} resolved to nothing" >&2; exit 1; }
@@ -150,8 +150,8 @@ build)
         [ "${ACTION[${name}]}" = build ] || continue
         parent="${PARENT[${name}]}"
         case "${parent}:${ACTION[${parent}]-}" in
-        upstream.*:* | *:build)
-            # The upstream mirror, or a parent this job has just built into the local store.
+        upstream:*:* | *:build)
+            # The upstream image, or a parent this job has just built into the local store.
             MICA_BUILD_PLATFORM="linux/${ARCH}" bash "${HERE}/build.sh" "${name}" >&2
             ;;
         *)
@@ -219,7 +219,7 @@ resolve)
             exit 1
         }
         digest="sha256:$(sha256sum "${WORK}/index" | cut -d' ' -f1)"
-        printf 'image\t%s\tindex\t%s@%s\n' "${name}" "${ref}" "${digest}" >>"${OUT}"
+        printf 'image\tmica-build-env\t%s\tindex\t%s@%s\n' "${name}" "${ref}" "${digest}" >>"${OUT}"
         for arch in "${ARCHES[@]}"; do
             pd="$(jq -r --arg a "${arch}" '[.manifests[]? | select(.platform.os == "linux" and .platform.architecture == $a) | .digest] | first // empty' "${WORK}/index")"
             [ -n "${pd}" ] || { echo "error: ${ref}@${digest} lists no linux/${arch} manifest" >&2; exit 1; }
@@ -228,7 +228,7 @@ resolve)
                 echo "error: the linux/${arch} manifest ${pd} of ${ref} does not read anonymously at its digest" >&2
                 exit 1
             }
-            printf 'image\t%s\t%s\t%s@%s\n' "${name}" "${arch}" "${REPOSITORY}" "${pd}" >>"${OUT}"
+            printf 'image\tmica-build-env\t%s\t%s\t%s@%s\n' "${name}" "${arch}" "${REPOSITORY}" "${pd}" >>"${OUT}"
         done
     done
     echo "publish-images: wrote the image rows of ${#IMAGES[@]} images to ${OUT}" >&2

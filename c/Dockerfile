@@ -1,4 +1,4 @@
-# syntax=ghcr.io/micaoss/mica-build-env:upstream.docker-dockerfile.1.ecfaec9ed6d8@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# syntax=docker.io/docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 # check=skip=InvalidDefaultArgInFrom
 # mica-build-c -- the native C and C++ toolchain, on top of mica-build-base;
 # mica-build-go and mica-build-rust build on it.

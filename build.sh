@@ -19,11 +19,11 @@ command -v docker >/dev/null 2>&1 || {
     exit 1
 }
 
-# One row per image: <directory>:<input key prefixes>:<its FROM: the upstream.<name> mirror or a LOCAL_ key>.
+# One row per image: <directory>:<input key prefixes>:<its FROM: an upstream:<name> image or a LOCAL_ key>.
 # Order matters: a row FROM a localhost/mica-build-* tag must follow the row that
 # builds it (checked below).
 IMAGES=(
-    "base:BASE_,DEB_,OPENSSL_:upstream.debian.trixie-slim"
+    "base:BASE_,DEB_,OPENSSL_:upstream:debian:trixie-slim"
     "c:C_:LOCAL_MICA_BUILD_BASE"
     "go:GO_:LOCAL_MICA_BUILD_C"
     "rust:RUST_,RUSTCHECK_:LOCAL_MICA_BUILD_C"
@@ -73,11 +73,11 @@ PLATFORM_ARCH="${MICA_BUILD_PLATFORM#linux/}"
 pins_load || exit 1
 STRIPPED="${PINS}"
 
-# Every upstream image row names a mirror this repository publishes.
+# Every upstream image row resolves to its pinned reference.
 bash "${HERE}/from.sh" --check
 
 # `# syntax=` is read before any ARG exists, so each Dockerfile writes the
-# frontend out and it is checked against the docker-dockerfile.1 mirror here. A
+# frontend out and it is checked against the docker/dockerfile:1 pin here. A
 # Dockerfile without the directive uses the daemon's built-in frontend.
 check_dockerfile_frontends() {
     local f line bad=0 seen=0
@@ -87,7 +87,7 @@ check_dockerfile_frontends() {
         [ -n "${line}" ] || continue
         seen=$((seen + 1))
         [ "${line}" = "${FRONTEND}" ] && continue
-        echo "error: ${f} declares '# syntax=${line}', but locks/upstream.lock pins the frontend mirror ${FRONTEND}. The frontend parses this Dockerfile before any ARG exists, so it cannot be passed as a build argument and the reference has to be written out here -- which is why it is checked against the file rather than trusted. Change locks/upstream.lock and every Dockerfile together, or neither" >&2
+        echo "error: ${f} declares '# syntax=${line}', but locks/upstream.lock pins the frontend ${FRONTEND}. The frontend parses this Dockerfile before any ARG exists, so it cannot be passed as a build argument and the reference has to be written out here -- which is why it is checked against the file rather than trusted. Change locks/upstream.lock and every Dockerfile together, or neither" >&2
         bad=1
     done < <(git -C "${HERE}" ls-files '*Dockerfile' 2>/dev/null || true)
     [ "${seen}" -gt 0 ] || {
@@ -97,7 +97,7 @@ check_dockerfile_frontends() {
     [ "${bad}" = 0 ] && echo "frontend pin: ${seen} Dockerfile(s) agree with ${FRONTEND}" >&2
     return "${bad}"
 }
-FRONTEND="$(mirror_ref docker-dockerfile.1)" || exit 1
+FRONTEND="$(upstream_ref docker/dockerfile:1)" || exit 1
 check_dockerfile_frontends
 
 # Native builds pin the `default` builder: only the docker driver resolves a
@@ -131,7 +131,7 @@ for row in "${IMAGES[@]}"; do
 
     # Otherwise the child silently builds on whatever a previous run left tagged.
     case "${from_key}" in
-    upstream.*) from_value_early="$(mirror_ref "${from_key#upstream.}")" || exit 1 ;;
+    upstream:*) from_value_early="$(upstream_ref "${from_key#upstream:}")" || exit 1 ;;
     *) from_value_early="${!from_key-}" ;;
     esac
     if selected "${name}" && [ -n "${PARENT}" ]; then

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# publish-images.sh, publish-mirrors.sh, check-lock.sh, pins.sh, from.sh,
-# fetch-archives.sh and publish-release.sh against a copy of this tree, with gh,
-# docker and curl replaced by stubs: the specification's lock and upstream
-# vectors, the refusals of locks/upstream.lock and params.env, which inputs move
-# which image, the mirror copy and its refusals, the mica-build-env.lock a
-# release writes, and every refusal of a release before anything is written.
+# publish-images.sh, check-lock.sh, pins.sh, from.sh, fetch-archives.sh and
+# publish-release.sh against a copy of this tree, with gh, docker and curl
+# replaced by stubs: the specification's lock and upstream vectors and the
+# image-row source rules, the refusals of locks/upstream.lock and params.env,
+# which inputs move which image, the mica-build-env.lock a release writes, and
+# every refusal of a release before anything is written.
 #
 #   bash tests/publish-test.sh      (no network, no docker)
 set -euo pipefail
@@ -32,18 +32,17 @@ g add -A
 g commit -q -m fixture
 
 # ------------------------------------------------------------ stubs
-# docker is a registry in ${STUB_REG}: blobs/<digest> holds manifest bytes,
-# tags/<ref with / written %> the digest a tag names. `imagetools inspect [--raw]`
-# answers from it; a build-env `<image>.inputs-*` tag that is published (any with
-# STUB_ALL=1, else those listed in STUB_PUBLISHED) is an index generated from its
-# tag, so a changed tag changes its children's inputs as a real one does.
-# `imagetools create -t <tag> <src@digest>` points the tag at the source digest.
+# docker is a registry in ${STUB_REG}: blobs/<digest> holds manifest bytes, and
+# `imagetools inspect [--raw]` answers from it; a build-env `<image>.inputs-*` tag
+# that is published (any with STUB_ALL=1, else those listed in STUB_PUBLISHED)
+# is an index generated from its tag, so a changed tag changes its children's
+# inputs as a real one does.
 STUBS="${WORK}/stubs"
 LOG="${WORK}/calls"
 UP="${WORK}/uploaded"
 PUBLISHED="${WORK}/published"
 REG="${WORK}/registry"
-mkdir -p "${STUBS}" "${UP}" "${REG}/blobs" "${REG}/tags"
+mkdir -p "${STUBS}" "${UP}" "${REG}/blobs"
 : >"${PUBLISHED}"
 cat >"${STUBS}/mkindex" <<'STUB'
 #!/usr/bin/env bash
@@ -70,7 +69,6 @@ echo "docker $*" >>"${STUB_LOG}"
 resolve() { # resolve <ref>: the digest it names, or fail
     local ref="$1" tag
     case "${ref}" in *@sha256:*) [ -f "${STUB_REG}/blobs/${ref##*@}" ] && echo "${ref##*@}"; return ;; esac
-    [ ! -f "${STUB_REG}/tags/${ref//\//%}" ] || { cat "${STUB_REG}/tags/${ref//\//%}"; return; }
     tag="${ref##*:}"
     case "${tag}" in
     *.inputs-*)
@@ -88,13 +86,6 @@ inspect)
         d="$(resolve "$4")" || exit 1
         printf 'Name: %s\nMediaType: application/vnd.oci.image.index.v1+json\nDigest: %s\n' "$4" "${d}"
     fi ;;
-create)
-    shift 3
-    tags=()
-    while [ "$1" = -t ]; do tags+=("$2"); shift 2; done
-    [ "$#" = 1 ] || { echo "stub docker: create takes one source here" >&2; exit 2; }
-    d="$(resolve "$1")" || { echo "stub docker: no source $1" >&2; exit 1; }
-    for t in "${tags[@]}"; do printf '%s\n' "${d}" >"${STUB_REG}/tags/${t//\//%}"; done ;;
 *) echo "stub docker: unexpected $*" >&2; exit 2 ;;
 esac
 STUB
@@ -158,6 +149,11 @@ done <"${BE}/tests/vectors/expected.tsv"
 got="$(bash "${BE}/check-lock.sh" upstream "${BE}/locks/upstream.lock" 2>&1 || true)"
 [ "${got}" = valid ] && pass "this tree's locks/upstream.lock is valid" || fail "this tree's locks/upstream.lock: ${got}"
 
+# The image row before its source column is refused.
+{ printf '# mica-lock v1\nrelease\tmica-build-env\t20260914-2042\t%040d\n' 0; printf 'image\tbase\tindex\tghcr.io/micaoss/mica-build-env:base.x@sha256:%064d\n' 1; } >"${WORK}/row.lock"
+got="$(bash "${BE}/check-lock.sh" lock "${WORK}/row.lock" 2>&1 || true)"
+[ "${got}" = "refused column-count" ] && pass "the four-column image row is refused: column-count" || fail "the four-column image row: ${got}"
+
 # ------------------------------------------------------------ pins.sh through from.sh --check
 check_refusal() { # check_refusal LABEL PATTERN: from.sh --check refuses the edited tree, which is then restored
     if (cd "${BE}" && bash from.sh --check) >"${WORK}/check.out" 2>&1; then
@@ -213,8 +209,8 @@ else
     fail "--resolve amd64 only: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
 fi
 if resolve "${WORK}/good.rows"; then pass "--resolve writes the image rows once every image is published"; else fail "--resolve: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"; fi
-shape="$(while IFS="${TAB}" read -r kind name platform ref; do
-    if [ "${kind}" = image ] && { { [ "${platform}" = index ] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env:${name}\.inputs-[0-9a-f]{16}@sha256:[0-9a-f]{64}$ ]]; } ||
+shape="$(while IFS="${TAB}" read -r kind source name platform ref; do
+    if [ "${kind}" = image ] && [ "${source}" = mica-build-env ] && { { [ "${platform}" = index ] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env:${name}\.inputs-[0-9a-f]{16}@sha256:[0-9a-f]{64}$ ]]; } ||
         { [[ "${platform}" =~ ^(amd64|arm64)$ ]] && [[ "${ref}" =~ ^ghcr\.io/micaoss/mica-build-env@sha256:[0-9a-f]{64}$ ]]; }; }; then
         printf '%s:%s ' "${name}" "${platform}"
     else
@@ -222,7 +218,7 @@ shape="$(while IFS="${TAB}" read -r kind name platform ref; do
     fi
 done <"${WORK}/good.rows")"
 if [ "${shape}" = "base:index base:amd64 base:arm64 c:index c:amd64 c:arm64 go:index go:amd64 go:arm64 rust:index rust:amd64 rust:arm64 " ]; then
-    pass "the image rows name each image's index by its inputs tag and its amd64 and arm64 manifests by digest"
+    pass "the image rows name mica-build-env, each image's index by its inputs tag and its amd64 and arm64 manifests by digest"
 else
     fail "the image rows: ${shape}"
 fi
@@ -268,7 +264,7 @@ build_refusal "--merge with an empty plan is refused" "missing or empty" --merge
 moved() { # moved LABEL EXPECTED: resolve after a change, compare the images whose rows moved, restore the tree
     local got
     resolve "${WORK}/moved.rows" || true
-    got="$({ diff "${WORK}/good.rows" "${WORK}/moved.rows" || true; } | awk -F"${TAB}" '/^> image/ && $3 == "index" {print $2}' | sort | tr '\n' ' ' | sed 's/ $//')"
+    got="$({ diff "${WORK}/good.rows" "${WORK}/moved.rows" || true; } | awk -F"${TAB}" '/^> image/ && $4 == "index" {print $3}' | sort | tr '\n' ' ' | sed 's/ $//')"
     if [ "${got}" = "$2" ]; then pass "$1 -> moves: ${2:-none}"; else fail "$1 -> moves: '${got}', want '$2'"; fi
     g checkout -q -- .
 }
@@ -291,7 +287,7 @@ moved "the rust version changes" "rust"
 sed -i "s/^\(source${TAB}go${TAB}arm64${TAB}[^${TAB}]*${TAB}\)[0-9a-f]*/\1$(printf go | sha256sum | cut -d' ' -f1)/" "${BE}/locks/upstream.lock"
 moved "a go archive hash changes" "go"
 
-sed -i "/^image${TAB}debian.trixie-slim${TAB}/s/@sha256:.*/@sha256:$(printf trixie | sha256sum | cut -d' ' -f1)/" "${BE}/locks/upstream.lock"
+sed -i "/^image${TAB}upstream${TAB}debian:trixie-slim${TAB}/s/@sha256:.*/@sha256:$(printf trixie | sha256sum | cut -d' ' -f1)/" "${BE}/locks/upstream.lock"
 moved "the Debian base pin changes" "base c go rust"
 
 printf '\n# probe\n' >>"${BE}/lib/common.sh"
@@ -300,89 +296,8 @@ moved "lib/common.sh changes" "base c go rust"
 printf '\n# probe\n' >>"${BE}/publish-release.sh"
 moved "a script no image copies changes" ""
 
-sed -i "/^image${TAB}ubuntu.24.04${TAB}/s/@sha256:.*/@sha256:$(printf ubuntu | sha256sum | cut -d' ' -f1)/" "${BE}/locks/upstream.lock"
+sed -i "/^image${TAB}upstream${TAB}ubuntu:24.04${TAB}/s/@sha256:.*/@sha256:$(printf ubuntu | sha256sum | cut -d' ' -f1)/" "${BE}/locks/upstream.lock"
 moved "an upstream image no build-env image stands on changes" ""
-
-# ------------------------------------------------------------ publish-mirrors.sh
-# A fixture locks/upstream.lock: the image rows given, then this tree's source rows.
-TRIXIE="$(mkindex debian-trixie amd64,arm64,386)"
-LABS="$(mkindex dockerfile-labs amd64,arm64)"
-NO386="$(mkindex ubuntu amd64,arm64)"
-SOURCE_ROWS="$(grep "^source${TAB}" "${BE}/locks/upstream.lock")"
-fixture_lock() { printf '# mica-lock v1\n%s\n%s\n' "$1" "${SOURCE_ROWS}" >"${BE}/locks/upstream.lock"; }
-img() { printf 'image\t%s\t%s\t%s' "$@"; }
-fixture_lock "$(img debian.trixie-slim 386 "docker.io/library/debian:trixie-slim@${TRIXIE}")
-$(img debian.trixie-slim amd64 "docker.io/library/debian:trixie-slim@${TRIXIE}")
-$(img debian.trixie-slim arm64 "docker.io/library/debian:trixie-slim@${TRIXIE}")
-$(img docker-dockerfile.1-labs amd64 "docker.io/docker/dockerfile:1-labs@${LABS}")
-$(img docker-dockerfile.1-labs arm64 "docker.io/docker/dockerfile:1-labs@${LABS}")"
-g commit -q -am "fixture mirrors"
-MIRROR_TRIXIE="ghcr.io/micaoss/mica-build-env:upstream.debian.trixie-slim.${TRIXIE:7:12}"
-MIRROR_LABS="ghcr.io/micaoss/mica-build-env:upstream.docker-dockerfile.1-labs.${LABS:7:12}"
-mirrors() { : >"${LOG}"; (cd "${BE}" && bash publish-mirrors.sh "$@") >"${WORK}/mirrors.out" 2>&1; }
-
-if mirrors --rows "${WORK}/m.rows"; then
-    fail "--rows succeeds before anything is mirrored"
-elif says "${WORK}/mirrors.out" "${MIRROR_TRIXIE} does not read anonymously"; then
-    pass "--rows before the copy refuses, naming the mirror tag"
-else
-    fail "--rows before the copy: $(tail -n2 "${WORK}/mirrors.out" | tr '\n' ' ')"
-fi
-if mirrors --publish && says "${LOG}" "imagetools create -t ${MIRROR_TRIXIE} docker.io/library/debian:trixie-slim@${TRIXIE}" &&
-    says "${LOG}" "imagetools create -t ${MIRROR_LABS} docker.io/docker/dockerfile:1-labs@${LABS}"; then
-    pass "--publish copies each upstream index by digest to upstream.<path>.<tag>.<digest12>"
-else
-    fail "--publish: $(tail -n3 "${WORK}/mirrors.out" | tr '\n' ' ')"
-fi
-[ "$(cat "${REG}/tags/${MIRROR_TRIXIE//\//%}")" = "${TRIXIE}" ] && pass "... the mirror keeps the upstream index digest" || fail "... mirror digest: $(cat "${REG}/tags/${MIRROR_TRIXIE//\//%}")"
-mirrors --publish && ! says "${LOG}" "imagetools create" && says "${WORK}/mirrors.out" "is mirrored" &&
-    pass "... a second --publish copies nothing" || fail "... second --publish: $(cat "${LOG}")"
-if mirrors --rows "${WORK}/m.rows"; then
-    want="$(printf 'image\tupstream.debian.trixie-slim\t386\t%s@%s\nimage\tupstream.debian.trixie-slim\tamd64\t%s@%s\nimage\tupstream.debian.trixie-slim\tarm64\t%s@%s\nimage\tupstream.docker-dockerfile.1-labs\tamd64\t%s@%s\nimage\tupstream.docker-dockerfile.1-labs\tarm64\t%s@%s' \
-        "${MIRROR_TRIXIE}" "${TRIXIE}" "${MIRROR_TRIXIE}" "${TRIXIE}" "${MIRROR_TRIXIE}" "${TRIXIE}" "${MIRROR_LABS}" "${LABS}" "${MIRROR_LABS}" "${LABS}")"
-    [ "$(cat "${WORK}/m.rows")" = "${want}" ] && pass "--rows writes one row per guaranteed platform, each naming the index digest" || fail "--rows: $(cat "${WORK}/m.rows")"
-else
-    fail "--rows after the copy: $(tail -n2 "${WORK}/mirrors.out" | tr '\n' ' ')"
-fi
-
-printf '%s\n' "$(mkindex other amd64,arm64)" >"${REG}/tags/${MIRROR_LABS//\//%}"
-if mirrors --publish; then
-    fail "--publish accepts a mirror tag that holds another digest"
-elif says "${WORK}/mirrors.out" "already holds .* never re-pointed" && ! says "${LOG}" "imagetools create -t ${MIRROR_LABS}"; then
-    pass "--publish refuses a mirror tag that holds another digest, without re-pointing it"
-else
-    fail "--publish over another digest: $(tail -n2 "${WORK}/mirrors.out" | tr '\n' ' ')"
-fi
-printf '%s\n' "${LABS}" >"${REG}/tags/${MIRROR_LABS//\//%}"
-
-list_refusal() { # list_refusal LABEL PATTERN IMAGE_ROWS: --rows refuses the image rows before reading the registry
-    fixture_lock "$3"
-    if mirrors --rows "${WORK}/x.rows"; then
-        fail "$1: accepted"
-    elif says "${WORK}/mirrors.out" "$2" && ! says "${LOG}" "docker"; then
-        pass "$1"
-    else
-        fail "$1: $(tail -n2 "${WORK}/mirrors.out" | tr '\n' ' ') $(cat "${LOG}")"
-    fi
-    g checkout -q -- locks/upstream.lock
-}
-list_refusal "a mirror reference without a digest is refused" "is refused reference-digest" "$(img debian.trixie-slim amd64 docker.io/library/debian:trixie-slim)"
-list_refusal "a platform outside index, amd64, arm64, 386 is refused" "is refused field-value" "$(img debian.trixie-slim riscv64 "docker.io/library/debian:trixie-slim@${TRIXIE}")"
-list_refusal "one name at two upstream indexes is refused" "one image is one upstream index" "$(img debian.trixie-slim amd64 "docker.io/library/debian:trixie-slim@${TRIXIE}")
-$(img debian.trixie-slim arm64 "docker.io/library/debian:trixie-slim@${NO386}")"
-list_refusal "a name that is not the reference's <path>.<tag> is refused" "not 'debian.trixie-slim'" "$(img debian.trixie amd64 "docker.io/library/debian:trixie-slim@${TRIXIE}")"
-list_refusal "a reference without a tag is refused" "which has no tag" "$(img debian.trixie-slim amd64 "docker.io/library/debian@${TRIXIE}")"
-
-fixture_lock "$(img ubuntu.24.04 386 "docker.io/library/ubuntu:24.04@${NO386}")
-$(img ubuntu.24.04 amd64 "docker.io/library/ubuntu:24.04@${NO386}")"
-if mirrors --publish; then
-    fail "--publish accepts an upstream index without a guaranteed platform"
-elif says "${WORK}/mirrors.out" "lists no linux/386 manifest"; then
-    pass "--publish refuses an index that lacks a platform the release guarantees"
-else
-    fail "--publish without 386: $(tail -n2 "${WORK}/mirrors.out" | tr '\n' ' ')"
-fi
-g checkout -q -- locks/upstream.lock
 
 # ------------------------------------------------------------ fetch-archives.sh
 # Its own locks/upstream.lock and a curl stub that serves "archive <name>" for any URL.
@@ -446,8 +361,6 @@ no_call() { if says "${LOG}" "$2"; then fail "$1: '$2' was called"; else pass "$
 none_called() { if [ -s "${LOG}" ]; then fail "$1: $(tr '\n' ' ' <"${LOG}")"; else pass "$1"; fi; }
 nothing_written() { if says "${LOG}" "release upload" || says "${LOG}" "release edit"; then fail "$1: $(grep 'release \(upload\|edit\)' "${LOG}")"; else pass "$1"; fi; }
 
-# The image rows of this tree as the fixture mirrors left it.
-resolve "${WORK}/final.rows" || fail "--resolve after the mirror fixture: $(tail -n2 "${WORK}/resolve.out" | tr '\n' ' ')"
 T0=20260101-0000
 T1=20260102-0304
 printf '\n' >>"${BE}/README.md"
@@ -486,10 +399,13 @@ STUB_ALL="" release "a tag whose images are not published is refused" 1 "the ima
 nothing_written "... and nothing is written"
 STUB_DOCKER_FAIL=1 release "images that do not read anonymously are refused" 1 "not all published" "${T1}"
 nothing_written "... and nothing is written"
-mv "${REG}/tags" "${REG}/tags.kept" && mkdir "${REG}/tags"
-release "a tag whose upstream mirrors are not published is refused" 1 "the mirror job publishes them for ${T1}" "${T1}"
+sed -i "/^image${TAB}upstream${TAB}/s/@sha256:.*//" "${BE}/locks/upstream.lock"
+g commit -q -am "an upstream image without a digest"
+g update-ref refs/remotes/origin/main HEAD
+STUB_TAG_SHA="$(g rev-parse HEAD)" release "a locks/upstream.lock that breaks the file rules is refused" 1 "locks/upstream.lock is refused reference-digest" "${T1}"
 nothing_written "... and nothing is written"
-rm -rf "${REG}/tags" && mv "${REG}/tags.kept" "${REG}/tags"
+g reset -q --hard HEAD~1
+g update-ref refs/remotes/origin/main HEAD
 STUB_RELEASES="${T0} ${T1}" STUB_LOCK_TAGS="${T0}" release "a previous lock that cannot be read is refused" 1 "whether the images changed is unknown" "${T1}"
 nothing_written "... and nothing is written"
 
@@ -506,11 +422,13 @@ else
     fail "... SHA256SUMS: $(cat "${UP}/SHA256SUMS" 2>/dev/null)"
 fi
 [ "$(bash "${BE}/check-lock.sh" lock "${UP}/mica-build-env.lock")" = valid ] && pass "... the lock passes check-lock.sh" || fail "... check-lock: $(bash "${BE}/check-lock.sh" lock "${UP}/mica-build-env.lock")"
-want_lock="$(printf '# mica-lock v1\nrelease\tmica-build-env\t%s\t%s\n' "${T1}" "${HEAD_SHA}"; cat "${WORK}/final.rows" "${WORK}/m.rows" | LC_ALL=C sort -t "${TAB}" -k2,2 -k3,3)"
-[ "$(cat "${UP}/mica-build-env.lock")" = "${want_lock}" ] && pass "... the lock is the release row, then the image and mirror rows by name and platform" || fail "... lock: $(cat "${UP}/mica-build-env.lock")"
-[ "$(sed -n '3,5p' "${UP}/mica-build-env.lock" | cut -f2,3 | tr '\t\n' ': ')" = "base:amd64 base:arm64 base:index " ] &&
+want_lock="$(printf '# mica-lock v1\nrelease\tmica-build-env\t%s\t%s\n' "${T1}" "${HEAD_SHA}"; { cat "${WORK}/good.rows"; grep "^image${TAB}upstream${TAB}" "${BE}/locks/upstream.lock"; } | LC_ALL=C sort -t "${TAB}" -k2,2 -k3,3 -k4,4)"
+[ "$(cat "${UP}/mica-build-env.lock")" = "${want_lock}" ] && pass "... the lock is the release row, then this repository's image rows and the upstream image rows of locks/upstream.lock, by source, name and platform" || fail "... lock: $(cat "${UP}/mica-build-env.lock")"
+[ "$(grep -c "^image${TAB}upstream${TAB}docker.io/\|${TAB}ghcr.io/micaoss/mica-build-env:upstream\." "${UP}/mica-build-env.lock" || true)" = 0 ] &&
+    pass "... upstream images keep their original names and references" || fail "... rewritten upstream rows"
+[ "$(sed -n '3,5p' "${UP}/mica-build-env.lock" | cut -f3,4 | tr '\t\n' ': ')" = "base:amd64 base:arm64 base:index " ] &&
     pass "... platforms sort as bytes: amd64, arm64, index" || fail "... order: $(head -n5 "${UP}/mica-build-env.lock")"
-grep -c "^image${TAB}upstream.debian.trixie-slim${TAB}386${TAB}" "${UP}/mica-build-env.lock" >/dev/null && pass "... debian trixie-slim carries its 386 row" || fail "... no 386 row"
+grep -c "^image${TAB}upstream${TAB}debian:trixie-slim${TAB}386${TAB}docker.io/library/debian:trixie-slim@sha256:" "${UP}/mica-build-env.lock" >/dev/null && pass "... debian:trixie-slim carries its 386 row" || fail "... no 386 row"
 cp "${UP}/mica-build-env.lock" "${WORK}/first.lock"
 
 STUB_RELEASES="${T0} ${T1}" STUB_LOCK_TAGS="${T0}" STUB_PREV_TAG="${T0}" STUB_PREV_LOCK="${WORK}/first.lock" release "a release after one with the same images" 0 "Images: unchanged from ${T0}." "${T1}"

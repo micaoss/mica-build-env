@@ -4,8 +4,8 @@
 #
 #   pins_load         validate both files and set PINS: one KEY=VALUE line per
 #                     input, parameters first, and every key as a variable
-#   mirror_ref <name> the mirror of the image rows <name> (debian.trixie-slim):
-#                     <package>:upstream.<name>.<digest12>@sha256:<index digest>
+#   upstream_ref <name> the reference of the upstream image rows <name>
+#                     (debian:trixie-slim): its original reference by index digest
 #
 # A source row becomes the keys the image scripts read: <PREFIX>_VERSION,
 # <PREFIX>_URL_<ARCH> and <PREFIX>_SHA256_<ARCH>, the prefix naming the image
@@ -13,7 +13,6 @@
 
 UPSTREAM_LOCK="${HERE}/locks/upstream.lock"
 PARAMS_ENV="${HERE}/params.env"
-MIRROR_REPOSITORY="${MICA_IMAGES_REPOSITORY:-ghcr.io/micaoss/mica-build-env}"
 
 declare -A SOURCE_PREFIX=(
     [bun]=BASE_BUN
@@ -60,9 +59,9 @@ pins_load() {
     done <<<"${PINS}"
 }
 
-mirror_ref() {
-    local digest
-    digest="$(awk -F'\t' -v n="$1" '$1 == "image" && $2 == n { sub(/.*@/, "", $4); print $4; exit }' "${UPSTREAM_LOCK}")"
-    [ -n "${digest}" ] || { echo "error: locks/upstream.lock has no image rows named $1" >&2; return 1; }
-    printf '%s:upstream.%s.%s@%s\n' "${MIRROR_REPOSITORY}" "$1" "${digest:7:12}" "${digest}"
+upstream_ref() {
+    local ref
+    ref="$(awk -F'\t' -v n="$1" '$1 == "image" && $2 == "upstream" && $3 == n { print $5; exit }' "${UPSTREAM_LOCK}")"
+    [ -n "${ref}" ] || { echo "error: locks/upstream.lock has no image rows named $1" >&2; return 1; }
+    printf '%s\n' "${ref}"
 }

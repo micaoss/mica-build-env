@@ -10,14 +10,16 @@ rules that apply to a release of mica-build-env are this file at its tag.
   example `20260218-1411`), and carries two assets: `mica-build-env.lock` and
   `SHA256SUMS` listing only it. The lock is written when the release is cut,
   in mica-lock v1 (`mica:docs/design/release-lock.md`, checked by
-  `check-lock.sh`): the release row, then `image` rows sorted by name and
-  platform:
-  - each build-env image (`base`, `c`, `go`, `rust`): `index` as
+  `check-lock.sh`): the release row, then `image <source> <name> <platform>
+  <reference>` rows sorted by source, name and platform:
+  - source `mica-build-env`, each build-env image (`base`, `c`, `go`, `rust`):
+    `index` as
     `ghcr.io/micaoss/mica-build-env:<image>.inputs-<16 hex>@sha256:<64 hex>`,
     and `amd64` and `arm64` as `ghcr.io/micaoss/mica-build-env@sha256:<64 hex>`,
     the platform manifests;
-  - each upstream mirror (section 2): `upstream.<path>.<tag>`, one row per
-    platform the release guarantees, each naming the mirror's index digest.
+  - source `upstream`, each upstream image of `locks/upstream.lock` (section 2)
+    as it is there: its original name and reference, one row per platform the
+    release guarantees, each naming the index digest.
 
   It is not the repository's `locks/upstream.lock`, which pins the images'
   third-party inputs.
@@ -25,14 +27,12 @@ rules that apply to a release of mica-build-env are this file at its tag.
   <commit of main>`, which creates the tag on GitHub; no tag is created or
   pushed locally. Publishing then runs only in CI: `release.yml`, triggered by
   `release: published`, builds from the release's tag, publishes the images
-  its inputs name and the upstream mirrors, and attaches the assets to that
-  release. Each architecture
+  its inputs name, and attaches the assets to that release. Each architecture
   is built natively on its own runner, and a final job merges the
   per-architecture images into the multi-arch index; nothing is emulated. `ci.yml` runs the
   quality gates on push and pull request and publishes nothing.
-- A release exists only when every build-env image of its commit and every
-  upstream mirror is published and reads with no credential at the digest its
-  row names. An asset is never replaced, and no
+- A release exists only when every build-env image of its commit is
+  published and reads with no credential at the digest its row names. An asset is never replaced, and no
   time-tagged release may be later than the one being attached
   (`publish-release.sh`).
 - Once the assets are attached, the release notes gain the comparison of its
@@ -61,34 +61,29 @@ rules that apply to a release of mica-build-env are this file at its tag.
   refused. A Dockerfile names no image
   directly: it takes its `FROM` as a build argument with no default.
 - A consumer takes the build-env images and the upstream images from the
-  `mica-build-env.lock` of the release it pins, and reads a third-party image
-  from its mirror, never from `docker.io` or another upstream registry.
+  `mica-build-env.lock` of the release it pins; an upstream image is read from
+  its original registry at the pinned digest, and Mica does not republish it.
 - mica-build-env pins its third-party inputs in `locks/upstream.lock`
-  (`mica:docs/design/release-lock.md`, 4.1): `image` rows name each upstream
-  image by its upstream reference and index digest, one row per platform the
-  release guarantees, and `source` rows each toolchain archive by version,
+  (`mica:docs/design/release-lock.md`, 4.1): `image upstream` rows name each
+  upstream image by its original name (`debian:trixie-slim`) and reference
+  (`docker.io/library/debian:trixie-slim@sha256:<index digest>`), one row per
+  platform the release guarantees, and `source` rows each toolchain archive by version,
   sha256 and URL per architecture. Build parameters that are not pins (the
   `*_FLOOR_*_MIN` floors, `LOCAL_MICA_BUILD_*` tags, Rust triples) are in
   `params.env`, which names no image or archive (`pins.sh`).
-- The upstream images live in `ghcr.io/micaoss/mica-build-env` too.
-  `publish-mirrors.sh` copies each whole index to
-  `upstream.<path>.<tag>.<digest12>` (`/` written `-`, without
-  `docker.io/library/`), so the mirror keeps the upstream digest and every
-  platform; a mirror tag that holds another digest is refused, never
-  re-pointed.
 - The build-env images live in `ghcr.io/micaoss/mica-build-env`, one index
   with amd64 and arm64 (`publish-images.sh`):
 
   | Row | Image | Adds |
   | --- | --- | --- |
-  | `image base` | base, on the `debian.trixie-slim` mirror | ca-certificates, git, file, binutils, xz, curl, wget, openssl, jq, dpkg-dev, mmdebstrap, python3 (also as `python`), bun (source `bun`) |
-  | `image c` | c, on base | build-essential, cmake, pkgconf, autoconf, automake, libtool, ccache |
-  | `image go` | go, on c | Go (source `go`), cgo through c, `GOTOOLCHAIN=local` |
-  | `image rust` | rust, on c | rustc, cargo, clippy and rustfmt (source `rust`), std (source `rust-std`) and a linker for the other architecture, cargo-nextest and cargo-deny (sources `cargo-nextest`, `cargo-deny`), dbus-daemon |
+  | `image mica-build-env base` | base, on `debian:trixie-slim` | ca-certificates, git, file, binutils, xz, curl, wget, openssl, jq, dpkg-dev, mmdebstrap, python3 (also as `python`), bun (source `bun`) |
+  | `image mica-build-env c` | c, on base | build-essential, cmake, pkgconf, autoconf, automake, libtool, ccache |
+  | `image mica-build-env go` | go, on c | Go (source `go`), cgo through c, `GOTOOLCHAIN=local` |
+  | `image mica-build-env rust` | rust, on c | rustc, cargo, clippy and rustfmt (source `rust`), std (source `rust-std`) and a linker for the other architecture, cargo-nextest and cargo-deny (sources `cargo-nextest`, `cargo-deny`), dbus-daemon |
 
 - The tag is `<image>.inputs-<16 hex>`: a hash of the image's inputs from
-  `locks/upstream.lock` and `params.env`, its parent's inputs tag (the Debian
-  mirror for base), its Dockerfile, its
+  `locks/upstream.lock` and `params.env`, its parent's inputs tag (the
+  `debian:trixie-slim` reference for base), its Dockerfile, its
   dockerignore allow-list and `lib/`. An image is rebuilt only when those
   inputs change or its parent is rebuilt, which also rebuilds every image
   built on it; a tag that exists is never re-pointed. Each index is also tagged

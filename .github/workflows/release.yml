@@ -1,7 +1,6 @@
 name: release
 # Runs only when a release is published (`gh release create <YYYYMMDD-HHMM>
-# --target <commit>`), building from the release's tag. The mirror job copies the
-# upstream images of locks/upstream.lock into this repository's package; the plan job lists the
+# --target <commit>`), building from the release's tag. The plan job lists the
 # build-env images these inputs do not have yet; one job per architecture builds
 # them natively on its own runner and pushes <image>.<arch>.build-<commit12>; the
 # merge job joins both into the multi-arch <image>.inputs-<16>; the assets job
@@ -17,24 +16,7 @@ concurrency:
 env:
   TAG: ${{ github.event.release.tag_name }}
 jobs:
-  mirror:
-    # The upstream images of locks/upstream.lock, copied whole by digest into this
-    # repository's package and read back anonymously, before anything builds on them.
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: refs/tags/${{ github.event.release.tag_name }}
-      - name: Mirror the upstream images
-        run: |
-          set -euo pipefail
-          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          bash publish-mirrors.sh --publish
   plan:
-    needs: mirror
     runs-on: ubuntu-24.04
     outputs:
       plan: ${{ steps.plan.outputs.plan }}

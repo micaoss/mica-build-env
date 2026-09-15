@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Attach the assets to a published release YYYYMMDD-HHMM (UTC): mica-build-env.lock,
 # the mica-lock v1 lock of the release (mica:docs/design/release-lock.md) naming
-# the build-env images its tag's inputs name and the upstream mirrors, and
+# the build-env images its tag's inputs name and the upstream images of
+# locks/upstream.lock, and
 # SHA256SUMS listing only that lock; then add to its notes whether the image rows
 # changed from the previous release that carries mica-build-env.lock.
 #
@@ -100,21 +101,26 @@ while read -r t; do
     esac
 done < <(sort -r "${WORK}/releases")
 
-# The rows: the images this commit's inputs name and the upstream mirrors, each
-# read back with no credential at its digest.
+# The rows: the images this commit's inputs name, each read back with no
+# credential at its digest, and the upstream image rows of locks/upstream.lock
+# as they are (this repository does not republish them).
 bash "${HERE}/publish-images.sh" --resolve --out "${WORK}/images.rows" || {
     echo "error: the build-env images of ${HEAD} are not all published; the images job publishes them for ${TAG}; nothing was attached" >&2
     exit 1
 }
-bash "${HERE}/publish-mirrors.sh" --rows "${WORK}/mirrors.rows" || {
-    echo "error: the upstream mirrors are not all published; the mirror job publishes them for ${TAG}; nothing was attached" >&2
+check="$(bash "${HERE}/check-lock.sh" upstream "${HERE}/locks/upstream.lock")" || {
+    echo "error: locks/upstream.lock at ${HEAD} is ${check}; nothing was attached" >&2
     exit 1
 }
-# mica-lock v1: the release row, then the image rows sorted by name and platform as bytes.
+grep "^image$(printf '\t')upstream$(printf '\t')" "${HERE}/locks/upstream.lock" >"${WORK}/upstream.rows" || {
+    echo "error: locks/upstream.lock at ${HEAD} names no upstream image; nothing was attached" >&2
+    exit 1
+}
+# mica-lock v1: the release row, then the image rows sorted by source, name and platform as bytes.
 {
     echo "# mica-lock v1"
     printf 'release\t%s\t%s\t%s\n' "${NAME}" "${TAG}" "${HEAD}"
-    cat "${WORK}/images.rows" "${WORK}/mirrors.rows" | LC_ALL=C sort -t "$(printf '\t')" -k2,2 -k3,3
+    cat "${WORK}/images.rows" "${WORK}/upstream.rows" | LC_ALL=C sort -t "$(printf '\t')" -k2,2 -k3,3 -k4,4
 } >"${WORK}/assets/${LOCK}"
 check="$(bash "${HERE}/check-lock.sh" lock "${WORK}/assets/${LOCK}")" || {
     echo "error: the lock written for ${TAG} is ${check}; nothing was attached" >&2
@@ -153,7 +159,7 @@ body="$(jq -r '.body // ""' "${WORK}/release.json")"
 gh release edit "${TAG}" --repo "${REPO}" \
     --notes "${body:+${body}
 
-}${NAME} ${HEAD}: ${LOCK} (mica-lock v1) names its build-env images and upstream mirrors. Verify with SHA256SUMS. ${images_note}"
+}${NAME} ${HEAD}: ${LOCK} (mica-lock v1) names its build-env images and the upstream images they build on. Verify with SHA256SUMS. ${images_note}"
 
 echo "publish-release: ${TAG} at ${HEAD} carries its assets and reads anonymously. ${images_note}"
 echo "tag=${TAG}"

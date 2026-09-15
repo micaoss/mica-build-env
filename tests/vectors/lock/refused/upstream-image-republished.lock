@@ -13,7 +13,7 @@ image	mica-build-env	rust	amd64	ghcr.io/micaoss/mica-build-env@sha256:eeeeeeeeee
 image	mica-build-env	rust	arm64	ghcr.io/micaoss/mica-build-env@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee2
 image	mica-build-env	rust	index	ghcr.io/micaoss/mica-build-env:rust.20260914-2042@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0
 image	upstream	debian:trixie-slim	386	docker.io/library/debian:trixie-slim@sha256:7777777777777777777777777777777777777777777777777777777777777777
-image	upstream	debian:trixie-slim	amd64	docker.io/library/debian:trixie-slim@sha256:7777777777777777777777777777777777777777777777777777777777777777
+image	upstream	debian:trixie-slim	amd64	ghcr.io/micaoss/mica-build-env:debian-trixie-slim@sha256:7777777777777777777777777777777777777777777777777777777777777777
 image	upstream	debian:trixie-slim	arm64	docker.io/library/debian:trixie-slim@sha256:7777777777777777777777777777777777777777777777777777777777777777
 image	upstream	docker/dockerfile:1-labs	amd64	docker.io/docker/dockerfile:1-labs@sha256:8888888888888888888888888888888888888888888888888888888888888888
 image	upstream	docker/dockerfile:1-labs	arm64	docker.io/docker/dockerfile:1-labs@sha256:8888888888888888888888888888888888888888888888888888888888888888
