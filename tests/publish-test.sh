@@ -510,7 +510,10 @@ want_lock="$(printf '# mica-lock v1\nrelease\tmica-build-env\t%s\t%s\n' "${T1}" 
     pass "... upstream images keep their original names and references" || fail "... rewritten upstream rows"
 [ "$(sed -n '3,5p' "${UP}/mica-build-env.lock" | cut -f3,4 | tr '\t\n' ': ')" = "base:amd64 base:arm64 base:index " ] &&
     pass "... platforms sort as bytes: amd64, arm64, index" || fail "... order: $(head -n5 "${UP}/mica-build-env.lock")"
-grep -c "^image${TAB}upstream${TAB}debian:trixie-slim${TAB}386${TAB}docker.io/library/debian:trixie-slim@sha256:" "${UP}/mica-build-env.lock" >/dev/null && pass "... debian:trixie-slim carries its 386 row" || fail "... no 386 row"
+[ "$(grep -c "^image${TAB}upstream${TAB}debian:trixie-slim${TAB}" "${UP}/mica-build-env.lock")" = 2 ] &&
+    ! says "${UP}/mica-build-env.lock" "${TAB}386${TAB}" &&
+    pass "... debian:trixie-slim carries the platforms the release guarantees, and no platform nothing builds for" ||
+    fail "... debian rows: $(grep "debian:trixie-slim" "${UP}/mica-build-env.lock")"
 cp "${UP}/mica-build-env.lock" "${WORK}/first.lock"
 
 sed "s/\.${T1}@sha256:/.${R0}@sha256:/" "${WORK}/first.lock" >"${WORK}/same.lock"

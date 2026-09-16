@@ -6,7 +6,6 @@
 # Measure a new pin: docker buildx imagetools inspect <reference> (Digest:), or curl -fsSL <url> | sha256sum.
 image	upstream	alpine:3.24.1	amd64	docker.io/library/alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 image	upstream	alpine:3.24.1	arm64	docker.io/library/alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
-image	upstream	debian:trixie-slim	386	docker.io/library/debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 image	upstream	debian:trixie-slim	amd64	docker.io/library/debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 image	upstream	debian:trixie-slim	arm64	docker.io/library/debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 image	upstream	docker/dockerfile:1	amd64	docker.io/docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
