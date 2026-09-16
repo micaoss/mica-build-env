@@ -8,9 +8,18 @@ say() {
     fail=1
 }
 
+# line1: the first line of stdin. It reads all of it: `head -n1` would exit
+# early, and under `set -o pipefail` the producer then dies of SIGPIPE and takes
+# the script with it.
+line1() {
+    local all
+    all="$(cat)"
+    printf '%s\n' "${all%%$'\n'*}"
+}
+
 # ge A B: true when version A >= B.
 ge() {
-    [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
+    [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | line1)" = "$2" ]
 }
 
 need() {

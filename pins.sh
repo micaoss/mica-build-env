@@ -7,9 +7,12 @@
 #   upstream_ref <name> the reference of the upstream image rows <name>
 #                     (debian:trixie-slim): its original reference by index digest
 #
-# A source row becomes the keys the image scripts read: <PREFIX>_VERSION,
-# <PREFIX>_URL_<ARCH> and <PREFIX>_SHA256_<ARCH>, the prefix naming the image
-# that installs it (SOURCE_PREFIX).
+# A per-architecture source row becomes the keys the image scripts read:
+# <PREFIX>_VERSION, <PREFIX>_URL_<ARCH> and <PREFIX>_SHA256_<ARCH>, the prefix
+# naming the image that installs it (SOURCE_PREFIX). The `all` rows
+# `ubuntu-<suite>` are the Ubuntu archive snapshot the bsp image installs from:
+# they become BSP_APT_INSTANT and one BSP_APT_INRELEASE_<SUITE> per suite, so
+# they are inputs of that image alone.
 
 UPSTREAM_LOCK="${HERE}/locks/upstream.lock"
 PARAMS_ENV="${HERE}/params.env"
@@ -24,7 +27,7 @@ declare -A SOURCE_PREFIX=(
 )
 
 pins_load() {
-    local check line key value kind name arch version sha url rest
+    local check line key value kind name arch version sha url rest suite instant=""
     local -A versions=()
     check="$(bash "${HERE}/check-lock.sh" upstream "${UPSTREAM_LOCK}" 2>&1)" || {
         echo "error: locks/upstream.lock is ${check}" >&2
@@ -41,9 +44,31 @@ pins_load() {
     done <"${PARAMS_ENV}"
     while IFS=$'\t' read -r kind name arch version sha url rest; do
         [ "${kind}" = source ] || continue
+        if [ "${arch}" = all ]; then
+            # The archive snapshot: one instant, one signed InRelease per suite.
+            case "${name}" in
+            ubuntu-*) ;;
+            *) echo "error: locks/upstream.lock pins ${name} for all architectures; only the ubuntu-<suite> snapshot rows are" >&2; return 1 ;;
+            esac
+            [[ "${version}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo "error: the snapshot row ${name} names the instant '${version}', not YYYYMMDDTHHMMSSZ" >&2; return 1; }
+            suite="${name#ubuntu-}"
+            [ "${url}" = "https://snapshot.ubuntu.com/ubuntu/${version}/dists/${suite}/InRelease" ] || {
+                echo "error: the snapshot row ${name} is not the InRelease of suite ${suite} at ${version}: ${url}" >&2
+                return 1
+            }
+            if [ -z "${instant}" ]; then
+                instant="${version}"
+                PINS="${PINS}BSP_APT_INSTANT=${instant}"$'\n'
+            elif [ "${instant}" != "${version}" ]; then
+                echo "error: locks/upstream.lock names two snapshot instants, ${instant} and ${version}; a snapshot moves as a whole" >&2
+                return 1
+            fi
+            key="BSP_APT_INRELEASE_${suite^^}"
+            PINS="${PINS}${key//-/_}=${sha}"$'\n'
+            continue
+        fi
         key="${SOURCE_PREFIX[${name}]-}"
         [ -n "${key}" ] || { echo "error: locks/upstream.lock pins the source ${name}, which no image installs (pins.sh SOURCE_PREFIX)" >&2; return 1; }
-        [ "${arch}" != all ] || { echo "error: locks/upstream.lock pins ${name} for all architectures; every archive an image installs is per architecture" >&2; return 1; }
         if [ -z "${versions[${name}]-}" ]; then
             versions["${name}"]="${version}"
             PINS="${PINS}${key}_VERSION=${version}"$'\n'

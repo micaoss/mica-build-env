@@ -37,3 +37,6 @@ source	rust	amd64	1.98.0	ed8ee2df70909c88cbaf87a6cfa3920dac00b537de12a6abe690664
 source	rust	arm64	1.98.0	ac9283184301aeed06ecc9f5aa4c1be7041e18a1b197b6cb6c5d162d98f566da	https://static.rust-lang.org/dist/rust-1.98.0-aarch64-unknown-linux-gnu.tar.xz
 source	rust-std	amd64	1.98.0	f5022e6c95a5ad23cca2513dc8281200f585fa188de6370aa37b128a43f876a3	https://static.rust-lang.org/dist/rust-std-1.98.0-x86_64-unknown-linux-gnu.tar.xz
 source	rust-std	arm64	1.98.0	a36f7ac98af20ef0ba6368aace0345efabbebaef7962eba99f47190fd256162d	https://static.rust-lang.org/dist/rust-std-1.98.0-aarch64-unknown-linux-gnu.tar.xz
+source	ubuntu-noble	all	20260915T000000Z	cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0	https://snapshot.ubuntu.com/ubuntu/20260915T000000Z/dists/noble/InRelease
+source	ubuntu-noble-security	all	20260915T000000Z	ab92035d2202045bd3ddf4d15bf469d460979a6a94e8f81c59885ba23d36c21b	https://snapshot.ubuntu.com/ubuntu/20260915T000000Z/dists/noble-security/InRelease
+source	ubuntu-noble-updates	all	20260915T000000Z	fccd5d3f5d46cfcd9d2c05ffd0720de11fa77c9b8e3b4e47d1874da83c0360b1	https://snapshot.ubuntu.com/ubuntu/20260915T000000Z/dists/noble-updates/InRelease

@@ -46,7 +46,8 @@ gh_status() {
     if gh api "$1" >"${WORK}/body" 2>"${WORK}/err"; then
         echo 200
     else
-        sed -n 's/.*(HTTP \([0-9]*\)).*/\1/p' "${WORK}/err" | head -n1
+        codes="$(sed -n 's/.*(HTTP \([0-9]*\)).*/\1/p' "${WORK}/err")"
+        printf '%s\n' "${codes%%$'\n'*}"
     fi
 }
 

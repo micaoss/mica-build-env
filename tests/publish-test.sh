@@ -178,6 +178,18 @@ got="$(bash "${BE}/check-lock.sh" upstream "${BE}/locks/upstream.lock" 2>&1 || t
 got="$(bash "${BE}/check-lock.sh" lock "${WORK}/row.lock" 2>&1 || true)"
 [ "${got}" = "refused column-count" ] && pass "the four-column image row is refused: column-count" || fail "the four-column image row: ${got}"
 
+# ------------------------------------------------------------ the shell shapes this tree refuses
+# Under `set -o pipefail` a consumer that exits early (head, grep -q, grep -m,
+# sed with q, read) makes the producer die of SIGPIPE and fails the pipeline,
+# which small inputs hide until they grow (mica-podman 6c63a7a).
+early=""
+while IFS= read -r f; do
+    grep -c 'set -[a-z]*o pipefail\|set -euo pipefail' "${BE}/${f}" >/dev/null || continue
+    hits="$(grep -nE '\|[[:space:]]*(head|grep[[:space:]]+(-[a-zA-Z]*[qm])|sed[[:space:]][^|]*[[:space:]]q([[:space:]]|$)|read)([[:space:]]|$)|\|[[:space:]]*awk[^|]*exit[[:space:]]*}' "${BE}/${f}" | grep -v '^[0-9]*: *#' || true)"
+    [ -z "${hits}" ] || early="${early}${f}: ${hits}"$'\n'
+done < <(cd "${BE}" && git ls-files '*.sh')
+[ -z "${early}" ] && pass "no early-exiting consumer on the right of a pipe under pipefail" || fail "early-exiting pipe consumers: ${early}"
+
 # ------------------------------------------------------------ pins.sh through from.sh --check
 check_refusal() { # check_refusal LABEL PATTERN: from.sh --check refuses the edited tree, which is then restored
     if (cd "${BE}" && bash from.sh --check) >"${WORK}/check.out" 2>&1; then
@@ -213,8 +225,8 @@ inputs_of() { awk -v n="$1" '$1 == n {print $2}' "${WORK}/none.plan"; }
 R0=20260101-0900
 T1=20260102-0304
 
-plan "${WORK}/none.plan" && [ "$(actions "${WORK}/none.plan")" = "base:build c:build go:build rust:build" ] &&
-    [ "$(grep -cE '^(base|c|go|rust) [0-9a-f]{64} build$' "${WORK}/none.plan")" = 4 ] &&
+plan "${WORK}/none.plan" && [ "$(actions "${WORK}/none.plan")" = "base:build c:build go:build rust:build bsp:build" ] &&
+    [ "$(grep -cE '^(base|c|go|rust|bsp) [0-9a-f]{64} build$' "${WORK}/none.plan")" = 5 ] &&
     pass "--plan with nothing published builds every image, each named by the sha256 of its inputs" || fail "--plan none: $(cat "${WORK}/none.plan" "${WORK}/plan.out")"
 
 build_refusal() { # build_refusal LABEL PATTERN ARGS...: --build/--merge refuse before any build or push
@@ -239,21 +251,21 @@ build_refusal "--merge with a release that is not YYYYMMDD-HHMM is refused" "is 
 build_refusal "--merge of an image whose architectures were not pushed is refused" "base.amd64.${R0} is not pushed" --merge "${R0}" "${WORK}/none.plan"
 
 # The build jobs of ${R0} pushed <image>.<arch>.${R0}.
-for n in base c go rust; do for a in amd64 arm64; do mkindex "${n}-${a}" "${a}" "$(inputs_of "${n}")" >"$(tagfile "${n}.${a}.${R0}")"; done; done
-if merge "${R0}" "${WORK}/none.plan" && [ "$(grep -c "imagetools create -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.amd64\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.arm64\.${R0}" "${LOG}")" = 4 ]; then
+for n in base c go rust bsp; do for a in amd64 arm64; do mkindex "${n}-${a}" "${a}" "$(inputs_of "${n}")" >"$(tagfile "${n}.${a}.${R0}")"; done; done
+if merge "${R0}" "${WORK}/none.plan" && [ "$(grep -c "imagetools create -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.amd64\.${R0} ghcr.io/micaoss/mica-build-env:[a-z]*\.arm64\.${R0}" "${LOG}")" = 5 ]; then
     pass "--merge publishes each built image as <image>.<release>, both architectures in one index"
 else
     fail "--merge ${R0}: $(tail -n3 "${WORK}/merge.out" | tr '\n' ' ')"
 fi
 ok=1
-for n in base c go rust; do [ "$(label "${n}.${R0}")" = "$(inputs_of "${n}")" ] || ok=0; done
+for n in base c go rust bsp; do [ "$(label "${n}.${R0}")" = "$(inputs_of "${n}")" ] || ok=0; done
 [ "${ok}" = 1 ] && pass "... every platform of each image carries its inputs as the label com.mica.build-env.inputs" || fail "... labels: $(label "base.${R0}")"
 merge "${R0}" "${WORK}/none.plan" && ! says "${LOG}" "imagetools create" && pass "... a rerun re-points nothing" || fail "... rerun: $(cat "${LOG}")"
 
-plan "${WORK}/all.plan" && [ "$(actions "${WORK}/all.plan")" = "base:published c:published go:published rust:published" ] &&
-    [ "$(grep -c " published ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0}@sha256:" "${WORK}/all.plan")" = 4 ] &&
+plan "${WORK}/all.plan" && [ "$(actions "${WORK}/all.plan")" = "base:published c:published go:published rust:published bsp:published" ] &&
+    [ "$(grep -c " published ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0}@sha256:" "${WORK}/all.plan")" = 5 ] &&
     pass "--plan finds every image published with these inputs under its release tag" || fail "--plan all published: $(cat "${WORK}/all.plan" "${WORK}/plan.out")"
-if merge "${T1}" "${WORK}/all.plan" && [ "$(grep -c "imagetools create -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${T1} ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0}@sha256:" "${LOG}")" = 4 ]; then
+if merge "${T1}" "${WORK}/all.plan" && [ "$(grep -c "imagetools create -t ghcr.io/micaoss/mica-build-env:[a-z]*\.${T1} ghcr.io/micaoss/mica-build-env:[a-z]*\.${R0}@sha256:" "${LOG}")" = 5 ]; then
     pass "--merge of a release with no image built tags each published image <image>.<release>"
 else
     fail "--merge ${T1}: $(tail -n3 "${WORK}/merge.out" | tr '\n' ' ')"
@@ -277,7 +289,7 @@ shape="$(while IFS="${TAB}" read -r kind source name platform ref; do
         printf 'bad:%s ' "${name}"
     fi
 done <"${WORK}/good.rows")"
-if [ "${shape}" = "base:index base:amd64 base:arm64 c:index c:amd64 c:arm64 go:index go:amd64 go:arm64 rust:index rust:amd64 rust:arm64 " ]; then
+if [ "${shape}" = "base:index base:amd64 base:arm64 c:index c:amd64 c:arm64 go:index go:amd64 go:arm64 rust:index rust:amd64 rust:arm64 bsp:index bsp:amd64 bsp:arm64 " ]; then
     pass "the image rows name mica-build-env, each index as <image>.<release> and its amd64 and arm64 manifests by digest"
 else
     fail "the image rows: ${shape}"
@@ -286,11 +298,11 @@ fi
 aside() { mkdir -p "${WORK}/aside"; for t in "$@"; do mv "$(tagfile "${t}")" "${WORK}/aside/"; done; }
 back() { mv "${WORK}/aside/"* "${REG}/tags/"; }
 aside "base.${R0}" "base.${T1}"
-plan "${WORK}/nobase.plan" && [ "$(actions "${WORK}/nobase.plan")" = "base:build c:build go:build rust:build" ] &&
-    pass "--plan rebuilds every child of a base that is not published, even when theirs are" || fail "--plan no base: $(cat "${WORK}/nobase.plan")"
+plan "${WORK}/nobase.plan" && [ "$(actions "${WORK}/nobase.plan")" = "base:build c:build go:build rust:build bsp:published" ] &&
+    pass "--plan rebuilds every child of a base that is not published, even when theirs are, and leaves bsp alone" || fail "--plan no base: $(cat "${WORK}/nobase.plan")"
 back
 aside "go.${R0}" "go.${T1}"
-plan "${WORK}/nogo.plan" && [ "$(actions "${WORK}/nogo.plan")" = "base:published c:published go:build rust:published" ] &&
+plan "${WORK}/nogo.plan" && [ "$(actions "${WORK}/nogo.plan")" = "base:published c:published go:build rust:published bsp:published" ] &&
     pass "--plan builds only an image not published with these inputs when its parent is" || fail "--plan no go: $(cat "${WORK}/nogo.plan")"
 back
 
@@ -351,13 +363,22 @@ sed -i "/^image${TAB}upstream${TAB}debian:trixie-slim${TAB}/s/@sha256:.*/@sha256
 moved "the Debian base pin changes" "base c go rust"
 
 printf '\n# probe\n' >>"${BE}/lib/common.sh"
-moved "lib/common.sh changes" "base c go rust"
+moved "lib/common.sh changes" "base bsp c go rust"
 
 printf '\n# probe\n' >>"${BE}/publish-release.sh"
 moved "a script no image copies changes" ""
 
 sed -i "/^image${TAB}upstream${TAB}ubuntu:24.04${TAB}/s/@sha256:.*/@sha256:$(printf ubuntu | sha256sum | cut -d' ' -f1)/" "${BE}/locks/upstream.lock"
+moved "the Ubuntu base pin changes (bsp stands on it)" "bsp"
+
+sed -i "/^image${TAB}upstream${TAB}alpine:3.24.1${TAB}/s/@sha256:.*/@sha256:$(printf alpine | sha256sum | cut -d' ' -f1)/" "${BE}/locks/upstream.lock"
 moved "an upstream image no build-env image stands on changes" ""
+
+sed -i "s/^\(source${TAB}ubuntu-noble${TAB}all${TAB}[^${TAB}]*${TAB}\)[0-9a-f]*/\1$(printf noble | sha256sum | cut -d' ' -f1)/" "${BE}/locks/upstream.lock"
+moved "an Ubuntu snapshot InRelease changes" "bsp"
+
+printf '\n# probe\n' >>"${BE}/bsp/apt-install.sh"
+moved "bsp/apt-install.sh changes" "bsp"
 
 # ------------------------------------------------------------ fetch-archives.sh
 # Its own locks/upstream.lock and a curl stub that serves "archive <name>" for any URL.

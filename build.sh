@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the pinned Mica OS builder images out of locks/upstream.lock and params.env.
 #
-#   bash build.sh  -> localhost/mica-build-{base,c,go,rust}:<arch>
+#   bash build.sh  -> localhost/mica-build-{base,c,go,rust,bsp}:<arch>
 #   bash build.sh  does the same thing
 #   bash build.sh base [<image> ...]  builds only the named images
 #   MICA_BUILD_PLATFORM=linux/arm64 ...  builds for another architecture
@@ -29,6 +29,7 @@ IMAGES=(
     "c|C_|LOCAL_MICA_BUILD_BASE"
     "go|GO_|LOCAL_MICA_BUILD_C"
     "rust|RUST_,RUSTCHECK_|LOCAL_MICA_BUILD_C"
+    "bsp|BSP_|upstream:ubuntu:24.04"
 )
 
 # Arguments select rows by name; none selects the whole table.
@@ -93,7 +94,10 @@ check_dockerfile_frontends() {
     local f line bad=0 seen=0
     while IFS= read -r f; do
         [ -f "${HERE}/${f}" ] || continue
-        line="$(sed -n '1,3s/^#[[:space:]]*syntax=[[:space:]]*//p' "${HERE}/${f}" | head -n1)"
+        # Read whole, then take the first line: `head -n1` exits early, and under
+        # pipefail the producer dies of SIGPIPE and takes this check with it.
+        lines="$(sed -n '1,3s/^#[[:space:]]*syntax=[[:space:]]*//p' "${HERE}/${f}")"
+        line="${lines%%$'\n'*}"
         [ -n "${line}" ] || continue
         seen=$((seen + 1))
         [ "${line}" = "${FRONTEND}" ] && continue

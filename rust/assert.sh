@@ -98,7 +98,7 @@ case "${deny_v}" in
 *"${RUSTCHECK_DENY_VERSION}"*) echo "ok cargo deny ${RUSTCHECK_DENY_VERSION} (exactly RUSTCHECK_DENY_VERSION)" ;;
 *) say "error: 'cargo deny --version' printed '${deny_v}', which does not carry the pinned RUSTCHECK_DENY_VERSION=${RUSTCHECK_DENY_VERSION}" ;;
 esac
-dbus_v="$(dbus-daemon --version 2>/dev/null | head -n1 || true)"
+dbus_v="$(dbus-daemon --version 2>/dev/null | line1 || true)"
 [ -n "${dbus_v}" ] || say "error: dbus-daemon is installed but 'dbus-daemon --version' printed nothing"
 
 finish toolchain
@@ -121,7 +121,7 @@ std_key="RUST_STD_SHA256_${uother}"
     echo "MICA_BUILD_RUSTFMT=$(rustfmt --version | awk '{print $2}')"
     echo "MICA_BUILD_NEXTEST=${RUSTCHECK_NEXTEST_VERSION}"
     echo "MICA_BUILD_DENY=${RUSTCHECK_DENY_VERSION}"
-    echo "MICA_BUILD_DBUS=$(dbus-daemon --version | head -n1 | awk '{print $NF}')"
+    echo "MICA_BUILD_DBUS=$(dbus-daemon --version | line1 | awk '{print $NF}')"
     nextest_key="RUSTCHECK_NEXTEST_SHA256_${uarch}"
     deny_key="RUSTCHECK_DENY_SHA256_${uarch}"
     echo "MICA_BUILD_NEXTEST_SHA256=${!nextest_key-}"

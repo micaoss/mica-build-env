@@ -11,7 +11,8 @@
 # Publishing is CI's: .github/workflows/release.yml runs --plan, then --build on
 # an amd64 and an arm64 runner, then --merge, when a release is published
 # (`docker login ghcr.io` with packages: write). base builds on
-# debian:trixie-slim (locks/upstream.lock), c on base, go and rust on c.
+# debian:trixie-slim (locks/upstream.lock), c on base, go and rust on c, and bsp
+# on ubuntu:24.04, the board toolchain.
 #
 # Every tag is a release: <image>.<release> (for example rust.20260915-0030).
 # An image's inputs are its keys of locks/upstream.lock and params.env
@@ -38,6 +39,7 @@ IMAGES=(
     "c|C_|base"
     "go|GO_|c"
     "rust|RUST_,RUSTCHECK_|c"
+    "bsp|BSP_|upstream:ubuntu:24.04"
 )
 
 USAGE="usage: bash publish-images.sh --plan <file> | --build <amd64|arm64> <release> <plan> | --merge <release> <plan> | --resolve <release> --out <file>"
@@ -91,7 +93,10 @@ raw() {
 index_digest() {
     local out
     out="$(docker buildx imagetools inspect "$1" 2>/dev/null)" || return 1
-    printf '%s\n' "${out}" | awk '/^Digest:[[:space:]]/{print $2; exit}'
+    # No early exit on the right of the pipe: under pipefail awk's `exit` can
+    # kill the producer with SIGPIPE. Take the first match after reading it all.
+    digests="$(printf '%s\n' "${out}" | awk '/^Digest:[[:space:]]/{print $2}')"
+    printf '%s\n' "${digests%%$'\n'*}"
 }
 
 # release_tags <image>: the <image>.<YYYYMMDD-HHMM> tags of the package, newest first,

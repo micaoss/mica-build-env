@@ -13,10 +13,10 @@ check_arch
 for t in gcc g++ cc make cmake pkgconf ccache autoconf automake libtoolize python3 ld; do need "${t}"; done
 check gcc     "${C_FLOOR_GCC_MIN}"     "$(gcc -dumpfullversion 2>/dev/null || true)"
 check g++     "${C_FLOOR_GCC_MIN}"     "$(g++ -dumpfullversion 2>/dev/null || true)"
-check make    "${C_FLOOR_MAKE_MIN}"    "$(make --version 2>/dev/null | head -n1 | awk '{print $NF}' || true)"
-check cmake   "${C_FLOOR_CMAKE_MIN}"   "$(cmake --version 2>/dev/null | head -n1 | awk '{print $NF}' || true)"
+check make    "${C_FLOOR_MAKE_MIN}"    "$(make --version 2>/dev/null | line1 | awk '{print $NF}' || true)"
+check cmake   "${C_FLOOR_CMAKE_MIN}"   "$(cmake --version 2>/dev/null | line1 | awk '{print $NF}' || true)"
 check pkgconf "${C_FLOOR_PKGCONF_MIN}" "$(pkgconf --version 2>/dev/null || true)"
-check ccache  "${C_FLOOR_CCACHE_MIN}"  "$(ccache --version 2>/dev/null | head -n1 | awk '{print $3}' || true)"
+check ccache  "${C_FLOOR_CCACHE_MIN}"  "$(ccache --version 2>/dev/null | line1 | awk '{print $3}' || true)"
 
 # A version check passes without libc headers or a working linker; compiling proves both.
 d="$(mktemp -d)"
@@ -45,10 +45,10 @@ mkdir -p /etc/mica-build
     echo "MICA_BUILD_ARCH=${arch}"
     echo "MICA_BUILD_GCC=$(gcc -dumpfullversion)"
     echo "MICA_BUILD_GXX=$(g++ -dumpfullversion)"
-    echo "MICA_BUILD_MAKE=$(make --version | head -n1 | awk '{print $NF}')"
-    echo "MICA_BUILD_CMAKE=$(cmake --version | head -n1 | awk '{print $NF}')"
+    echo "MICA_BUILD_MAKE=$(make --version | line1 | awk '{print $NF}')"
+    echo "MICA_BUILD_CMAKE=$(cmake --version | line1 | awk '{print $NF}')"
     echo "MICA_BUILD_PKGCONF=$(pkgconf --version)"
-    echo "MICA_BUILD_CCACHE=$(ccache --version | head -n1 | awk '{print $3}')"
-    echo "MICA_BUILD_AUTOCONF=$(autoconf --version | head -n1 | awk '{print $NF}')"
+    echo "MICA_BUILD_CCACHE=$(ccache --version | line1 | awk '{print $3}')"
+    echo "MICA_BUILD_AUTOCONF=$(autoconf --version | line1 | awk '{print $NF}')"
     echo "MICA_BUILD_PYTHON3=$(python3 --version | awk '{print $2}')"
 } >/etc/mica-build/c.env

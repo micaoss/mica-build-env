@@ -1,6 +1,6 @@
 # mica-build-env
 
-The build environment of Mica OS: four build-env images and `RULES.md`, the
+The build environment of Mica OS: five build-env images and `RULES.md`, the
 rules every Mica repository implements in its own scripts.
 
 ## Images
@@ -15,6 +15,7 @@ it, `<image>.<YYYYMMDD-HHMM>` (for example `rust.20260915-0138`):
 | `c` | `base` | build-essential, cmake, pkgconf, autoconf, automake, libtool, ccache |
 | `go` | `c` | Go with cgo, `GOTOOLCHAIN=local` |
 | `rust` | `c` | rustc, cargo, clippy, rustfmt, std and linker for the other architecture, cargo-nextest, cargo-deny, dbus-daemon |
+| `bsp` | `ubuntu:24.04` | the board toolchain: Ubuntu's gcc 13.3, the aarch64 cross toolchain on amd64, and the kernel, U-Boot and packer build dependencies |
 
 Each image asserts what it promises while it builds and records what it
 resolved to in `/etc/mica-build/<image>.env`.
@@ -25,7 +26,7 @@ A release carries exactly two assets:
 
 - `mica-build-env.lock` (mica-lock v1, `mica:docs/design/release-lock.md`):
   - the release row;
-  - `image mica-build-env <image> <index|amd64|arm64> ghcr.io/micaoss/mica-build-env...@sha256:...` for the four images;
+  - `image mica-build-env <image> <index|amd64|arm64> ghcr.io/micaoss/mica-build-env...@sha256:...` for the five images;
   - `image upstream <name> <platform> <reference>` for every third-party image Mica OS uses, with its original name and reference (for example `docker.io/library/debian:trixie-slim@sha256:...`).
 - `SHA256SUMS`, listing only the lock.
 
@@ -48,7 +49,8 @@ is a breaking update.
 
 - `locks/upstream.lock` pins every third-party input:
   - the upstream images, by original reference and index digest, one row per platform a release guarantees;
-  - the toolchain archives (bun, go, rust, rust-std, cargo-nextest, cargo-deny), by version, sha256 and URL per architecture.
+  - the toolchain archives (bun, go, rust, rust-std, cargo-nextest, cargo-deny), by version, sha256 and URL per architecture;
+  - the Ubuntu archive snapshot `bsp` installs from: one `ubuntu-<suite>` row per suite, naming the snapshot instant and the sha256 of that suite's signed InRelease. They are inputs of `bsp` alone and are read only while that image is built, never by a consumer.
 - `params.env` holds the build parameters that are not pins: version floors, local tags and Rust triples.
 
 An image's inputs are its rows and keys from those two files, its parent's

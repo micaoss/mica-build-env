@@ -17,9 +17,9 @@ fi
 # binutils by five programs: a slimmed package can ship strip without readelf.
 for t in git file strip objdump readelf ar nm xz bun; do need "${t}"; done
 check git      "${BASE_FLOOR_GIT_MIN}"      "$(git --version 2>/dev/null | awk '{print $3}' || true)"
-check file     "${BASE_FLOOR_FILE_MIN}"     "$(file --version 2>/dev/null | head -n1 | sed 's/^file-//' || true)"
-check binutils "${BASE_FLOOR_BINUTILS_MIN}" "$(strip --version 2>/dev/null | head -n1 | awk '{print $NF}' || true)"
-check xz       "${BASE_FLOOR_XZ_MIN}"       "$(xz --version 2>/dev/null | head -n1 | awk '{print $NF}' || true)"
+check file     "${BASE_FLOOR_FILE_MIN}"     "$(file --version 2>/dev/null | line1 | sed 's/^file-//' || true)"
+check binutils "${BASE_FLOOR_BINUTILS_MIN}" "$(strip --version 2>/dev/null | line1 | awk '{print $NF}' || true)"
+check xz       "${BASE_FLOOR_XZ_MIN}"       "$(xz --version 2>/dev/null | line1 | awk '{print $NF}' || true)"
 
 # The bundle file, not dpkg: the package can be installed with an empty bundle.
 bundle=/etc/ssl/certs/ca-certificates.crt
@@ -48,7 +48,7 @@ got="$(bun -e 'console.log(process.arch)' 2>&1 || true)"
 
 # Debian packaging: dpkg and dpkg-dev floored separately, perl because the dpkg-dev tools are perl.
 dpkg_version() {
-    "$1" --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p' | head -n1 || true
+    "$1" --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p' | line1 || true
 }
 check dpkg     "${DEB_FLOOR_DPKG_MIN}"     "$(dpkg_version dpkg)"
 check dpkg-deb "${DEB_FLOOR_DPKG_MIN}"     "$(dpkg_version dpkg-deb)"
@@ -81,12 +81,12 @@ mkdir -p /etc/mica-build
     echo "MICA_BUILD_ARCH=${arch}"
     echo "MICA_BUILD_DEBIAN=${codename}"
     echo "MICA_BUILD_GIT=$(git --version | awk '{print $3}')"
-    echo "MICA_BUILD_FILE=$(file --version | head -n1 | sed 's/^file-//')"
-    echo "MICA_BUILD_BINUTILS=$(strip --version | head -n1 | awk '{print $NF}')"
-    echo "MICA_BUILD_XZ=$(xz --version | head -n1 | awk '{print $NF}')"
+    echo "MICA_BUILD_FILE=$(file --version | line1 | sed 's/^file-//')"
+    echo "MICA_BUILD_BINUTILS=$(strip --version | line1 | awk '{print $NF}')"
+    echo "MICA_BUILD_XZ=$(xz --version | line1 | awk '{print $NF}')"
     echo "MICA_BUILD_BUN=$(bun --version)"
     echo "MICA_BUILD_BUN_SHA256=${!sha_key-}"
-    echo "MICA_BUILD_CURL=$(curl --version | head -n1 | awk '{print $2}')"
+    echo "MICA_BUILD_CURL=$(curl --version | line1 | awk '{print $2}')"
     echo "MICA_BUILD_DPKG=$(dpkg-query -W -f='${Version}' dpkg)"
     echo "MICA_BUILD_DPKG_DEV=$(dpkg-query -W -f='${Version}' dpkg-dev)"
     echo "MICA_BUILD_PERL=$(dpkg-query -W -f='${Version}' perl)"

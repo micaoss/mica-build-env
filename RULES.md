@@ -12,7 +12,7 @@ rules that apply to a release of mica-build-env are this file at its tag.
   in mica-lock v1 (`mica:docs/design/release-lock.md`, checked by
   `check-lock.sh`): the release row, then `image <source> <name> <platform>
   <reference>` rows sorted by source, name and platform:
-  - source `mica-build-env`, each build-env image (`base`, `c`, `go`, `rust`):
+  - source `mica-build-env`, each build-env image (`base`, `c`, `go`, `rust`, `bsp`):
     `index` as
     `ghcr.io/micaoss/mica-build-env:<image>.<YYYYMMDD-HHMM>@sha256:<64 hex>`,
     and `amd64` and `arm64` as `ghcr.io/micaoss/mica-build-env@sha256:<64 hex>`,
@@ -68,7 +68,9 @@ rules that apply to a release of mica-build-env are this file at its tag.
   upstream image by its original name (`debian:trixie-slim`) and reference
   (`docker.io/library/debian:trixie-slim@sha256:<index digest>`), one row per
   platform the release guarantees, and `source` rows each toolchain archive by version,
-  sha256 and URL per architecture. Build parameters that are not pins (the
+  sha256 and URL per architecture, plus the `ubuntu-<suite>` rows of the Ubuntu
+  archive snapshot (`all`, the instant as the version and the sha256 of that
+  suite's signed InRelease), which only the `bsp` image reads while it is built. Build parameters that are not pins (the
   `*_FLOOR_*_MIN` floors, `LOCAL_MICA_BUILD_*` tags, Rust triples) are in
   `params.env`, which names no image or archive (`pins.sh`).
 - The build-env images live in `ghcr.io/micaoss/mica-build-env`, one index
@@ -79,7 +81,8 @@ rules that apply to a release of mica-build-env are this file at its tag.
   | `image mica-build-env base` | base, on `debian:trixie-slim` | ca-certificates, git, file, binutils, xz, curl, wget, openssl, jq, dpkg-dev, mmdebstrap, python3 (also as `python`), bun (source `bun`) |
   | `image mica-build-env c` | c, on base | build-essential, cmake, pkgconf, autoconf, automake, libtool, ccache |
   | `image mica-build-env go` | go, on c | Go (source `go`), cgo through c, `GOTOOLCHAIN=local` |
-  | `image mica-build-env rust` | rust, on c | rustc, cargo, clippy and rustfmt (source `rust`), std (source `rust-std`) and a linker for the other architecture, cargo-nextest and cargo-deny (sources `cargo-nextest`, `cargo-deny`), dbus-daemon |
+  | `image mica-build-env bsp` | bsp, on `ubuntu:24.04` | Ubuntu's gcc 13.3, the aarch64 cross toolchain on amd64, and the kernel, U-Boot and packer build dependencies of the boards; the Ubuntu archive snapshot is installed once here, so no build of a consumer reaches an archive |
+| `image mica-build-env rust` | rust, on c | rustc, cargo, clippy and rustfmt (source `rust`), std (source `rust-std`) and a linker for the other architecture, cargo-nextest and cargo-deny (sources `cargo-nextest`, `cargo-deny`), dbus-daemon |
 
 - Every tag is the release that published it: each release tags every image
   `<image>.<YYYYMMDD-HHMM>` (for example `rust.20260915-0030`), and its lock
