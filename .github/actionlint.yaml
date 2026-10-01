@@ -1,0 +1,6 @@
+# actionlint 1.7.12, the pinned linter, predates the GitHub-hosted Ubuntu 26.04
+# runners; their labels are declared here until a release knows them.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

@@ -1,0 +1,81 @@
+name: update
+# Monthly, and by hand: moves locks/upstream.lock to what upstream publishes
+# today and locks/mica-build-tools.pin to that tool's latest release
+# (update-pins.sh). When anything moved and the gates and an amd64 build of
+# every image pass on the new pins, it commits them to main, cuts a release and
+# runs the release workflow on it. A push or release made with GITHUB_TOKEN
+# starts no other workflow, so this one runs the checks and calls the release.
+on:
+  schedule:
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: update
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 240
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: bun for bin/mica-tools (the source bun row of locks/upstream.lock)
+        run: echo "MICA_BUN=$(bash bin/bun.sh "$RUNNER_TEMP/bun")" >> "$GITHUB_ENV"
+      - name: Move the pins
+        id: pins
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash update-pins.sh | tee "$RUNNER_TEMP/changes"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The gates
+        if: steps.pins.outputs.changed == '1'
+        run: |
+          set -euo pipefail
+          bash from.sh --check
+          bash tests/publish-test.sh
+      - name: Build every image for amd64 from the new pins
+        if: steps.pins.outputs.changed == '1'
+        run: |
+          set -euo pipefail
+          bash fetch-archives.sh amd64 "$RUNNER_TEMP/mica-fetch-seed"
+          MICA_FETCH_SEED="$RUNNER_TEMP/mica-fetch-seed" bash build.sh
+      - name: Commit to main and cut the release
+        id: release
+        if: steps.pins.outputs.changed == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add locks bin
+          git commit -q -F - <<EOF
+          Move the pins to upstream's releases of $(date -u +%Y-%m-%d)
+
+          $(cat "$RUNNER_TEMP/changes")
+          EOF
+          git push origin HEAD:main
+          tag="$(date -u +%Y%m%d-%H%M)"
+          gh release create "$tag" --target "$(git rev-parse HEAD)" --title "$tag" \
+            --notes "The pins moved to upstream's releases of $(date -u +%Y-%m-%d) by update-pins.sh; the gates and an amd64 build of every image passed on them."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+  release:
+    needs: update
+    if: needs.update.outputs.tag != ''
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.update.outputs.tag }}
