@@ -1,0 +1,56 @@
+name: images
+# Builds every build-env image natively on amd64 when a push or pull request
+# changes what they are built from, so a broken Dockerfile, fetch or assert
+# script, or snapshot pin is found before a release builds it. Publishes nothing;
+# the release workflow builds both architectures and publishes. Also run by
+# hand (workflow_dispatch), for a push whose changed paths GitHub cannot tell.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "base/**"
+      - "c/**"
+      - "go/**"
+      - "rust/**"
+      - "bsp/**"
+      - "lib/**"
+      - "params.env"
+      - "locks/**"
+      - "build.sh"
+      - "pins.sh"
+      - "from.sh"
+      - "fetch-archives.sh"
+      - ".github/workflows/images.yml"
+  pull_request:
+    paths:
+      - "base/**"
+      - "c/**"
+      - "go/**"
+      - "rust/**"
+      - "bsp/**"
+      - "lib/**"
+      - "params.env"
+      - "locks/**"
+      - "build.sh"
+      - "pins.sh"
+      - "from.sh"
+      - "fetch-archives.sh"
+      - ".github/workflows/images.yml"
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: bun for bin/mica-tools (the source bun row of locks/upstream.lock)
+        run: echo "MICA_BUN=$(bash bin/bun.sh "$RUNNER_TEMP/bun")" >> "$GITHUB_ENV"
+      # Restore only, exact key: the archives main's CI gathered for these pins.
+      - name: Restore the amd64 toolchain archives
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mica-fetch-seed
+          key: mica-fetch-seed-amd64-${{ hashFiles('locks/upstream.lock') }}
+      - name: Build every image for amd64
+        run: MICA_FETCH_SEED="$RUNNER_TEMP/mica-fetch-seed" bash build.sh
