@@ -41,6 +41,14 @@ file at its tag.
 - The release notes say "Images: unchanged" or "Images: changed" against the
   previous release. A release whose images changed is a breaking update for
   every repository (build rules, section 1).
+- `make offline` writes the offline release of a clean checkout to
+  `_out/offline/` (`mica-build-tools:docs/spec/release-lock.md` sections 6 and
+  7): the lock with the release row `offline <HEAD>`, each build-env image as
+  `index` `local/mica-build-env:<image>.offline@sha256:<64 hex>` and the host
+  architecture `local/mica-build-env@sha256:<64 hex>`, the upstream rows
+  unchanged; `oci/`, one OCI image layout holding every image; `SHA256SUMS`
+  listing only the lock. The images are built natively for the host
+  architecture only. It is refused under CI and is never a release input.
 
 ## 2. Images
 

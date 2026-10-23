@@ -93,6 +93,25 @@ runs `release.yml` on it. bun is not moved: it
 moves by hand, with the `packageManager` of mica-build-tools and the TypeScript
 repositories.
 
+## Offline release
+
+`make offline` (`offline.sh`) builds the five images from the pinned inputs for
+the host architecture and writes the offline release of the checkout's HEAD
+(`mica-build-tools:docs/spec/release-lock.md` sections 6 and 7) to
+`_out/offline/`:
+
+- `mica-build-env.lock`: the release row `release mica-build-env offline <HEAD>`;
+  per image `index` as `local/mica-build-env:<image>.offline@sha256:...` and
+  the host architecture as `local/mica-build-env@sha256:...`; the upstream
+  rows as a release carries them;
+- `oci/`: one OCI image layout with every image, which `docker load` takes as
+  `local/mica-build-env:<image>.offline`;
+- `SHA256SUMS`, listing only the lock.
+
+A consumer pins it with `mica-tools local-lock mica-build-env <checkout>`. The
+images are built natively, so the lock names the host architecture only. It is
+refused under CI and on a dirty tree, and is never a release input.
+
 ## Development
 
 The lock rules run in `mica-build-tools`, at the commit `locks/mica-build-tools.pin`
@@ -104,12 +123,15 @@ export MICA_BUN="$(bash bin/bun.sh .tmp/bun)"
 bash from.sh --check          # locks/upstream.lock and params.env are valid
 bash tests/publish-test.sh    # which inputs move which image, every release refusal (no docker)
 bash build.sh [<image> ...]   # build localhost/mica-build-<image>:<arch> from the pinned inputs
+make offline                  # the offline release in _out/offline/
+bash tests/offline-test.sh    # the pinned tools and docker read _out/offline/ (docker)
 docker run --rm -v "$PWD:/repo:ro" -w /repo "$(bash from.sh --ref upstream:rhysd/actionlint:1.7.12)"   # lint the workflows
 ```
 
 | File | Purpose |
 | --- | --- |
 | `build.sh` | builds the images locally |
+| `offline.sh`, `Makefile` | writes the offline release of the checkout to `_out/offline/` |
 | `from.sh`, `pins.sh` | resolve the pinned inputs and the `FROM` of each image |
 | `fetch-archives.sh` | gathers the toolchain archives CI caches |
 | `update-pins.sh` | moves `locks/upstream.lock` and `locks/mica-build-tools.pin` to upstream's latest releases, measuring every changed row |
